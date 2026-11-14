@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLA Consenso · NGSengine × Assign</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Cpath d='M9 22V10m0 6h6m0-6v12m4-12v12h5' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topo">
+  <div class="marca">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#2a78d6"/><path d="M9 22V10m0 6h6m0-6v12m4-12v12h5" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round"/></svg>
+    <div>HLA Consenso<small>NGSengine × AlloSeq Assign</small></div>
+  </div>
+  <div class="projeto" id="projeto"></div>
+  <nav class="abas hidden" id="abas" role="tablist">
+    <button role="tab" data-aba="placa" aria-selected="true">Placa</button>
+    <button role="tab" data-aba="revisao">Revisão <span class="cont" id="cont-pend">0</span></button>
+    <button role="tab" data-aba="qualidade">Qualidade</button>
+    <button role="tab" data-aba="exportar">Exportar</button>
+  </nav>
+  <button class="icone-btn" id="bt-atalhos" title="Atalhos de teclado (?)">⌨</button>
+  <button class="icone-btn" id="bt-tema" title="Tema claro/escuro">◐</button>
+  <button class="icone-btn hidden" id="bt-nova" title="Abrir outra corrida">⟲ Nova corrida</button>
+</header>
+
+<main id="main">
+  <!-- tela inicial -->
+  <section class="inicio" id="tela-inicio">
+    <h1>Conferência NGSengine × Assign</h1>
+    <p class="lead">Arraste os arquivos da corrida: o export <b>TARR (.xml)</b> do NGSengine e os relatórios <b>Excel</b> do AlloSeq Assign (p1, p2…). O IL_DMR do REDOME é opcional.</p>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Selecionar arquivos">
+      <b>Solte os arquivos aqui</b><br><span class="muted">ou clique para escolher · .xml, .zip, .xlsx, .csv</span>
+      <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.csv" hidden>
+    </div>
+    <div class="slots">
+      <div class="slot vazio" id="slot-engine"><h3>NGSengine</h3><div class="arq">export TARR (.xml ou .zip)</div></div>
+      <div class="slot vazio" id="slot-assign"><h3>AlloSeq Assign</h3><div class="arq">relatórios .xlsx</div></div>
+      <div class="slot vazio" id="slot-dmr"><h3>IL_DMR (opcional)</h3><div class="arq">CSV com Patient;DMR</div></div>
+    </div>
+    <div class="privacidade">🔒 <div>Tudo é processado <b>no seu navegador</b>. Nenhum arquivo ou resultado é enviado para a internet. As decisões ficam salvas neste computador (por corrida) e podem ser exportadas.</div></div>
+    <div class="acoes-inicio">
+      <button class="btn primario" id="bt-analisar" disabled>Analisar corrida →</button>
+      <span class="muted" id="dica-inicio">Falta o export do NGSengine.</span>
+    </div>
+    <div class="erro-msg" id="erro-inicio"></div>
+  </section>
+
+  <section id="tela-app" class="hidden"></section>
+</main>
+
+<aside class="painel" id="painel" aria-hidden="true"></aside>
+<div class="dica hidden" id="dica"></div>
+<div id="relatorio"></div>
+
+<script src="js/arquivos.js"></script>
+<script src="js/core.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
