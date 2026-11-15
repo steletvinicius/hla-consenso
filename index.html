@@ -103,7 +103,7 @@ main { padding: 18px 20px 60px; max-width: 1600px; margin: 0 auto; }
 .drop { border: 2px dashed var(--border); border-radius: 16px; padding: 40px 24px; text-align: center; background: var(--surface-1); cursor: pointer; transition: .15s; }
 .drop:hover, .drop.sobre { border-color: var(--accent); background: var(--accent-soft); }
 .drop b { font-size: 17px; }
-.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+.slots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 16px; }
 .slot { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
 .slot h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); }
 .slot .arq { font-size: 13px; display: flex; gap: 6px; align-items: baseline; margin-top: 4px; word-break: break-all; }
@@ -323,6 +323,29 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   @page { size: A4 landscape; margin: 10mm; }
 }
 
+/* ---------------------------------------------------------------- rejeitados no NGSengine */
+.cel.rej { background: repeating-linear-gradient(135deg, #fde2e2 0 8px, #f6c3c3 8px 16px); border: 2px solid var(--critical); }
+.cel.rej::before { background: var(--critical); width: 6px; }
+.cel.rej .stt { color: var(--critical); font-weight: 700; }
+:root[data-theme="dark"] .cel.rej { background: repeating-linear-gradient(135deg, #4a2222 0 8px, #5c2a2a 8px 16px); }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .cel.rej { background: repeating-linear-gradient(135deg, #4a2222 0 8px, #5c2a2a 8px 16px); } }
+.sw.rej-sw { background: repeating-linear-gradient(135deg, #fde2e2 0 3px, #d03b3b 3px 5px); border: 1px solid var(--critical); }
+.cel.semmac { box-shadow: 0 0 0 2px var(--warning) inset; }
+
+/* ---------------------------------------------------------------- DRB3/4/5 */
+table.hz td { vertical-align: top; cursor: default; }
+table.hz tr { cursor: default; }
+table.hz tr:hover td { background: transparent; }
+.hz-vazio { color: var(--text-muted); text-align: center; }
+.hz-esp { font-size: 12px; color: var(--text-secondary); margin: 2px 0 6px; }
+.hz-seg button { padding: 3px 10px; font-size: 12px; }
+.hz-seg button.sugerido { outline: 2px dashed var(--accent); outline-offset: -3px; }
+.hz-saida { font-size: 12px; margin-top: 6px; }
+.hz-motivo { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.hz-alerta { font-size: 12px; margin-top: 4px; color: var(--text-primary); }
+td.hz-conf { background: var(--warning-soft); }
+.ok-conf { color: var(--good); font-weight: 600; }
+
 </style>
 </head>
 <body>
@@ -335,6 +358,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   <nav class="abas hidden" id="abas" role="tablist">
     <button role="tab" data-aba="placa" aria-selected="true">Placa</button>
     <button role="tab" data-aba="revisao">Revisão <span class="cont" id="cont-pend">0</span></button>
+    <button role="tab" data-aba="hemi">DRB3/4/5 <span class="cont" id="cont-hemi">0</span></button>
     <button role="tab" data-aba="qualidade">Qualidade</button>
     <button role="tab" data-aba="exportar">Exportar</button>
   </nav>
@@ -347,7 +371,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   <!-- tela inicial -->
   <section class="inicio" id="tela-inicio">
     <h1>Conferência NGSengine × Assign</h1>
-    <p class="lead">Arraste os arquivos da corrida: o export <b>TARR (.xml)</b> do NGSengine e os relatórios <b>Excel</b> do AlloSeq Assign (p1, p2…). O IL_DMR do REDOME é opcional.</p>
+    <p class="lead">Arraste os arquivos da corrida: o export <b>TARR (.xml)</b> do NGSengine e os relatórios <b>Excel</b> do AlloSeq Assign (p1, p2…).</p>
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Selecionar arquivos">
       <b>Solte os arquivos aqui</b><br><span class="muted">ou clique para escolher · .xml, .zip, .xlsx, .csv</span>
       <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.csv" hidden>
@@ -355,7 +379,6 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     <div class="slots">
       <div class="slot vazio" id="slot-engine"><h3>NGSengine</h3><div class="arq">export TARR (.xml ou .zip)</div></div>
       <div class="slot vazio" id="slot-assign"><h3>AlloSeq Assign</h3><div class="arq">relatórios .xlsx</div></div>
-      <div class="slot vazio" id="slot-dmr"><h3>IL_DMR (opcional)</h3><div class="arq">CSV com Patient;DMR</div></div>
     </div>
     <div class="privacidade">🔒 <div>Tudo é processado <b>no seu navegador</b>. Nenhum arquivo ou resultado é enviado para a internet. As decisões ficam salvas neste computador (por corrida) e podem ser exportadas.</div></div>
     <div class="acoes-inicio">
@@ -560,7 +583,99 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     return new Blob([...partes, ...central, new Uint8Array(fim.buffer)], { type: "application/zip" });
   }
 
-  const api = { lerZip, lerXlsx, criarZip, desescapar };
+
+  // ------------------------------------------------------------------ escrita de .xls (BIFF8 / Excel 97-2003)
+  /** Cria um .xls real (BIFF8 dentro de um contêiner OLE2). linhas: [[texto]] ; larguras: [chars] */
+  function criarXls(nomeAba, linhas, larguras) {
+    const partes = [];
+    const rec = (tipo, dados) => {
+      const u = new Uint8Array(4 + dados.length);
+      const dv = new DataView(u.buffer);
+      dv.setUint16(0, tipo, true); dv.setUint16(2, dados.length, true);
+      u.set(dados, 4);
+      return u;
+    };
+    const bytes = (...grupos) => {         // [ [valor, tamanho] ... ] little-endian
+      const tot = grupos.reduce((s, g) => s + g[1], 0);
+      const u = new Uint8Array(tot), dv = new DataView(u.buffer);
+      let o = 0;
+      for (const [v, t] of grupos) { if (t === 1) dv.setUint8(o, v); else if (t === 2) dv.setUint16(o, v, true); else dv.setUint32(o, v >>> 0, true); o += t; }
+      return u;
+    };
+    const juntar = arr => { const n = arr.reduce((s, a) => s + a.length, 0); const u = new Uint8Array(n); let o = 0; for (const a of arr) { u.set(a, o); o += a.length; } return u; };
+    const utf16 = s => { const u = new Uint8Array(s.length * 2); for (let i = 0; i < s.length; i++) { u[2 * i] = s.charCodeAt(i) & 255; u[2 * i + 1] = s.charCodeAt(i) >> 8; } return u; };
+    const bof = dt => rec(0x0809, bytes([0x0600, 2], [dt, 2], [0x0DBB, 2], [0x07CC, 2], [0, 4], [6, 4]));
+    const fonte = () => rec(0x0031, juntar([bytes([200, 2], [0, 2], [0x7FFF, 2], [400, 2], [0, 2], [0, 1], [0, 1], [0, 1], [0, 1], [5, 1], [0, 1]), new TextEncoder().encode("Arial")]));
+    const xfEstilo = () => rec(0x00E0, bytes([0, 2], [0, 2], [0xFFF5, 2], [0x20, 1], [0, 1], [0, 1], [0xF4, 1], [0, 4], [0, 4], [0x20C0, 2]));
+    const xfCelula = () => rec(0x00E0, bytes([0, 2], [0, 2], [0x0001, 2], [0x20, 1], [0, 1], [0, 1], [0x00, 1], [0, 4], [0, 4], [0x20C0, 2]));
+
+    // --- planilha
+    const nl = linhas.length, nc = Math.max(1, ...linhas.map(r => r.length));
+    const folha = [bof(0x0010)];
+    folha.push(rec(0x0200, bytes([0, 4], [nl, 4], [0, 2], [nc, 2], [0, 2])));
+    (larguras || []).forEach((w, i) => folha.push(rec(0x007D, bytes([i, 2], [i, 2], [Math.round(w * 256), 2], [15, 2], [0, 2], [0, 2]))));
+    linhas.forEach((r, ri) => r.forEach((v, ci) => {
+      v = v === null || v === undefined ? "" : String(v);
+      if (v === "") return;
+      v = v.slice(0, 32767);
+      folha.push(rec(0x0204, juntar([bytes([ri, 2], [ci, 2], [15, 2], [v.length, 2], [1, 1]), utf16(v)])));
+    }));
+    folha.push(rec(0x023E, bytes([0x06B6, 2], [0, 2], [0, 2], [64, 2], [0, 2], [0, 2], [0, 2], [0, 4])));
+    folha.push(rec(0x000A, new Uint8Array(0)));
+
+    // --- globais (BOUNDSHEET recebe o deslocamento da planilha no fim)
+    const nome = String(nomeAba).slice(0, 31);
+    const glob = [bof(0x0005), rec(0x0042, bytes([1200, 2])),
+      rec(0x003D, bytes([0, 2], [0, 2], [0x3000, 2], [0x2000, 2], [0x0038, 2], [0, 2], [0, 2], [1, 2], [0x0258, 2]))];
+    for (let i = 0; i < 4; i++) glob.push(fonte());
+    for (let i = 0; i < 15; i++) glob.push(xfEstilo());
+    glob.push(xfCelula());
+    glob.push(rec(0x0293, bytes([0x8000, 2], [0, 1], [0xFF, 1])));
+    const tamBound = 4 + 8 + nome.length * 2;
+    const tamGlob = glob.reduce((s, a) => s + a.length, 0) + tamBound + 4;
+    glob.push(rec(0x0085, juntar([bytes([tamGlob, 4], [0, 1], [0, 1], [nome.length, 1], [1, 1]), utf16(nome)])));
+    glob.push(rec(0x000A, new Uint8Array(0)));
+    let wb = juntar([...glob, ...folha]);
+    if (wb.length < 4096) { const u = new Uint8Array(4096); u.set(wb); wb = u; }   // evita o mini-stream do OLE
+
+    // --- contêiner OLE2 (setores de 512 bytes)
+    const SEC = 512, nW = Math.ceil(wb.length / SEC);
+    let nFat = 1;
+    while (Math.ceil((nW + 1 + nFat) / 128) > nFat) nFat++;
+    const total = nW + 1 + nFat;
+    const arq = new Uint8Array(SEC * (1 + total));
+    const dv = new DataView(arq.buffer);
+    [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1].forEach((b, i) => (arq[i] = b));
+    dv.setUint16(24, 0x003E, true); dv.setUint16(26, 3, true); dv.setUint16(28, 0xFFFE, true);
+    dv.setUint16(30, 9, true); dv.setUint16(32, 6, true);
+    dv.setUint32(44, nFat, true); dv.setUint32(48, nW, true);       // 1º setor do diretório
+    dv.setUint32(56, 4096, true); dv.setInt32(60, -2, true); dv.setUint32(64, 0, true);
+    dv.setInt32(68, -2, true); dv.setUint32(72, 0, true);
+    for (let i = 0; i < 109; i++) dv.setInt32(76 + 4 * i, i < nFat ? nW + 1 + i : -1, true);
+    arq.set(wb, SEC);
+    // diretório
+    const dirOff = SEC * (1 + nW);
+    const entrada = (idx, nomeE, tipo, filho, inicio, tam) => {
+      const o = dirOff + idx * 128;
+      const n = utf16(nomeE + "\0");
+      arq.set(n, o); dv.setUint16(o + 64, n.length, true);
+      arq[o + 66] = tipo; arq[o + 67] = 1;
+      dv.setInt32(o + 68, -1, true); dv.setInt32(o + 72, -1, true); dv.setInt32(o + 76, filho, true);
+      dv.setInt32(o + 116, inicio, true); dv.setUint32(o + 120, tam, true);
+    };
+    for (let i = 0; i < 4; i++) { const o = dirOff + i * 128; dv.setInt32(o + 68, -1, true); dv.setInt32(o + 72, -1, true); dv.setInt32(o + 76, -1, true); }
+    entrada(0, "Root Entry", 5, 1, -2, 0);
+    entrada(1, "Workbook", 2, -1, 0, wb.length);
+    // FAT
+    const fatOff = SEC * (1 + nW + 1);
+    for (let i = 0; i < nFat * 128; i++) dv.setInt32(fatOff + 4 * i, -1, true);
+    for (let i = 0; i < nW; i++) dv.setInt32(fatOff + 4 * i, i === nW - 1 ? -2 : i + 1, true);
+    dv.setInt32(fatOff + 4 * nW, -2, true);
+    for (let i = 0; i < nFat; i++) dv.setInt32(fatOff + 4 * (nW + 1 + i), -3, true);
+    return new Blob([arq], { type: "application/vnd.ms-excel" });
+  }
+
+  const api = { lerZip, lerXlsx, criarZip, criarXls, desescapar };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else raiz.Arquivos = api;
 })(typeof self !== "undefined" ? self : this);
@@ -781,13 +896,15 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       for (const lc of (S.locos.length ? S.locos : A.locos)) {
         const sum = v(S, id, lc);
         const amb = v(A, id, lc).join(" / ");
+        const insuf = /i\s*n\s*s\s*u\s*f\s*f\s*i\s*c\s*i\s*e\s*n\s*t/i.test(amb);
         const q30 = v(Q, id, lc).map(pct).filter(x => x !== null);
         const cov = v(C, id, lc).map(x => parseFloat(x)).filter(Number.isFinite);
         const bal = v(B, id, lc).map(pct).filter(x => x !== null);
         locos.push({
           id, chave: chaveId(id), locus: lc, arquivo: nomeArquivo,
           alelo1: sum[0] || "", alelo2: sum[1] || "",
-          gl: amb.replace(/\s+/g, ""),
+          gl: insuf ? "" : amb.replace(/\s+/g, ""),
+          glBruto: v(A, id, lc)[0] ? v(A, id, lc)[0].replace(/ /g, "") : "",   // igual ao app R
           q30: q30.length ? Math.min(...q30) : null,
           cobertura: cov.length ? Math.min(...cov) : null,
           balanco: bal.length ? Math.min(...bal) : null,
@@ -968,6 +1085,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const L = Object.assign({}, LIMITES_PADRAO, (cfg && cfg.limites) || {});
     const opc = { ignorarNulos: !cfg || cfg.ignorarNulos !== false };
     const exigirRevisaoQC = !cfg || cfg.revisarAlertaVermelho !== false;
+    const ntRejeitado = !cfg || cfg.rejeitadoNT !== false;
     const mapaA = new Map();
     const infoAssign = [];
     for (const as of assigns || []) {
@@ -999,9 +1117,16 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       return lin;
     }
     function sugerir(lin) {
-      const st = lin.comp.status, aprov = lin.engine && lin.engine.status === "Approved";
+      const st = lin.comp.status, e = lin.engine, aprov = e && e.status === "Approved";
       const temOpcao = !!lin.opcoes.engine;
-      if (st === "ausente") return { fonte: "nenhuma", automatica: true, motivo: "Locus não tipado em nenhum software" };
+      const temTipagemEngine = !!(e && (e.glConclusiva || e.glResultado || e.nmdp1));
+      if (st === "ausente" && !temTipagemEngine) return { fonte: "nenhuma", automatica: true, motivo: "Locus não tipado em nenhum software" };
+      if (temOpcao && /\?/.test(lin.opcoes.engine.join(""))) {
+        lin.semMac = true;
+        return { fonte: null, automatica: false, motivo: "Código NMDP incompleto (“?”): consulte a API MAC para obter o código" };
+      }
+      if (e && !aprov && temTipagemEngine && ntRejeitado)
+        return { fonte: "nt", automatica: true, motivo: `Locus ${e.status === "Rejected" ? "rejeitado" : "não aprovado"} no NGSengine → NT no resultado final` };
       if ((st === "identico" || st === "principal") && aprov && temOpcao) {
         if (exigirRevisaoQC && lin.qcNivel === "erro")
           return { fonte: null, automatica: false, motivo: "Concordante, mas com alerta vermelho de QC" };
@@ -1015,7 +1140,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
         so_assign: "NGSengine não tipou este locus",
       };
       let m = motivos[st] || "";
-      if (lin.engine && !aprov) m = `Locus ${lin.engine.status === "Rejected" ? "rejeitado" : "não aprovado"} no NGSengine` + (m ? " · " + m : "");
+      if (e && !aprov && temTipagemEngine) m = `Locus ${e.status === "Rejected" ? "rejeitado" : "não aprovado"} no NGSengine` + (m ? " · " + m : "");
       return { fonte: null, automatica: false, motivo: m || "Revisar" };
     }
     linhas.sort((x, y) => (x.chaveAmostra.localeCompare(y.chaveAmostra, undefined, { numeric: true }))
@@ -1029,16 +1154,14 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   function tipagemLiberada(lin, decisao) {
     const d = decisao || (lin.sugestao.automatica ? { fonte: lin.sugestao.fonte } : null);
     if (!d || !d.fonte) return { estado: "pendente", alelos: ["", ""] };
-    if (d.fonte === "nenhuma" || d.fonte === "nao_liberar") return { estado: d.fonte, alelos: ["", ""] };
-    if (d.fonte === "manual") return { estado: "manual", alelos: [d.alelo1 || "", d.alelo2 || ""] };
+    if (d.fonte === "nenhuma") return { estado: "nenhuma", alelos: ["", ""] };
+    if (d.fonte === "nt" || d.fonte === "nao_liberar") return { estado: "nt", alelos: ["NT", "NT"] };
+    if (d.fonte === "manual" || d.fonte === "mac") return { estado: d.fonte, alelos: [d.alelo1 || "", d.alelo2 || ""] };
     const op = lin.opcoes[d.fonte];
     return op ? { estado: d.fonte, alelos: op.slice() } : { estado: "pendente", alelos: ["", ""] };
   }
 
   // ================================================================== exportação
-  const ORDEM_SISHLA = ["HLA-A", "HLA-B", "HLA-C", "HLA-DQB1", "HLA-DPB1", "HLA-DRB1", "HLA-DQA1", "HLA-DPA1", "HLA-DRB3", "HLA-DRB4", "HLA-DRB5"];
-  const ORDEM_REDOME = ["HLA-A", "HLA-B", "HLA-C", "HLA-DRB1", "HLA-DQB1", "HLA-DRB3", "HLA-DRB4", "HLA-DRB5", "HLA-DQA1", "HLA-DPA1", "HLA-DPB1"];
-
   function csv(linhas, sep) {
     sep = sep || ";";
     const esc = v => {
@@ -1048,82 +1171,151 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     return linhas.map(r => r.map(esc).join(sep)).join("\n") + "\n";
   }
 
-  /** Linhas liberadas por amostra: [{amostra, locos:{locus:[a1,a2]}}] */
-  function agruparLiberadas(cons, decisoes, excluir) {
-    const filtroExcluir = (excluir || []).map(s => String(s).trim()).filter(Boolean);
+  // ------------------------------------------------------------------ hemizigose DRB3/4/5
+  /** Grupo DR associado ao 1º campo do DRB1 (DR51 -> DRB5, DR52 -> DRB3, DR53 -> DRB4). */
+  const DR_ASSOC = { "15": "HLA-DRB5", "16": "HLA-DRB5", "03": "HLA-DRB3", "11": "HLA-DRB3", "12": "HLA-DRB3",
+                     "13": "HLA-DRB3", "14": "HLA-DRB3", "04": "HLA-DRB4", "07": "HLA-DRB4", "09": "HLA-DRB4" };
+  const NOME_DR = { "HLA-DRB3": "DR52", "HLA-DRB4": "DR53", "HLA-DRB5": "DR51" };
+  const HEMI = ["HLA-DRB3", "HLA-DRB4", "HLA-DRB5"];
+  function campo1(alelo) { const m = /\*(\d+)/.exec(String(alelo || "")); return m ? m[1].padStart(2, "0") : ""; }
+
+  /** Para cada amostra: DRB1, cópias esperadas de DRB3/4/5 e sugestão de quantos alelos liberar. */
+  function analisarHemizigose(cons, decisoes) {
     const por = new Map();
-    for (const lin of cons.linhas) {
-      const s = lin.amostra;
-      const nomeAmostra = s ? s.nome : (lin.engine ? lin.engine.amostra : lin.id);
-      if (filtroExcluir.some(x => String(lin.id).includes(x) || nomeAmostra.includes(x))) continue;
-      const t = tipagemLiberada(lin, decisoes[lin.chave]);
-      if (!["engine", "assign", "manual"].includes(t.estado)) continue;
-      if (!t.alelos[0] && !t.alelos[1]) continue;
-      const k = lin.chaveAmostra;
-      if (!por.has(k)) por.set(k, { id: lin.id, nome: nomeAmostra, locos: {} });
-      por.get(k).locos[lin.locus] = t.alelos;
+    for (const l of cons.linhas) {
+      if (!por.has(l.chaveAmostra)) por.set(l.chaveAmostra, { chave: l.chaveAmostra, id: l.id, linhas: {} });
+      por.get(l.chaveAmostra).linhas[l.locus] = l;
     }
-    // mesma ordem do pivot do pandas (texto do sample_name)
-    return [...por.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const out = [];
+    for (const a of por.values()) {
+      const drb1 = a.linhas["HLA-DRB1"];
+      let alDrb1 = ["", ""];
+      if (drb1) {
+        const t = tipagemLiberada(drb1, decisoes[drb1.chave]);
+        alDrb1 = ["engine", "assign", "manual", "mac"].includes(t.estado) ? t.alelos : (drb1.opcoes.engine || drb1.opcoes.assign || ["", ""]);
+      }
+      const grupos = alDrb1.map(x => DR_ASSOC[campo1(x)] || (campo1(x) ? "nenhum" : ""));
+      const locos = {};
+      let relevante = false;
+      for (const lc of HEMI) {
+        const l = a.linhas[lc];
+        const esperado = alDrb1.filter(Boolean).length === 2 ? grupos.filter(g => g === lc).length : null;
+        const t = l ? tipagemLiberada(l, decisoes[l.chave]) : { estado: "nenhuma", alelos: ["", ""] };
+        let al = t.alelos;
+        if (t.estado === "pendente" && l) al = l.opcoes.engine || l.opcoes.assign || ["", ""];
+        const tipado = !!(al[0] || al[1]);
+        const nt = t.estado === "nt";
+        const hetero = tipado && !nt && al[0] && al[1] && al[0] !== al[1];
+        let sugestao = tipado ? 2 : 0, conflito = "", motivo = "";
+        if (!tipado) {
+          if (esperado) { conflito = `DRB1 indica ${esperado} cópia(s) de ${lc.replace("HLA-", "")}, mas o locus não foi tipado`; }
+        } else if (esperado === null) {
+          motivo = "DRB1 sem tipagem completa: não há como sugerir";
+        } else if (hetero) {
+          sugestao = 2;
+          if (esperado < 2) conflito = `Dois alelos diferentes, mas o DRB1 indica ${esperado} cópia(s)`;
+          motivo = "Heterozigoto: os 2 alelos são reais";
+        } else if (esperado === 0) {
+          sugestao = 1;
+          conflito = `${lc.replace("HLA-", "")} tipado, mas nenhum alelo do DRB1 está associado a ${NOME_DR[lc]}`;
+        } else {
+          sugestao = esperado;
+          motivo = esperado === 1 ? "Um haplótipo " + NOME_DR[lc] + ": liberar 1 alelo (duplicação removida)" : "Dois haplótipos " + NOME_DR[lc] + ": liberar os 2 alelos";
+        }
+        if (tipado || esperado) relevante = true;
+        locos[lc] = { linha: l || null, alelos: al, estado: t.estado, tipado, esperado, sugestao, conflito, motivo, nt };
+      }
+      if (relevante) out.push({ chave: a.chave, id: a.id, drb1: alDrb1, grupos, locos });
+    }
+    return out.sort((x, y) => x.chave.localeCompare(y.chave, undefined, { numeric: true }));
   }
 
-  /** Mesmo layout do ngsengine_to_sishla_report: 4 linhas vazias, colunas ordenadas. */
-  function exportarSishla(cons, decisoes, excluir) {
-    const grupos = agruparLiberadas(cons, decisoes, excluir);
-    const locos = ORDEM_SISHLA.filter(l => grupos.some(g => g.locos[l]));
+  function aplicarCopias(alelos, copias) {
+    if (copias === 0) return ["", ""];
+    if (copias === 1) return [alelos[0] || alelos[1] || "", ""];
+    return alelos;
+  }
+
+  // ------------------------------------------------------------------ resultado final (.xls)
+  const LOCOS_FINAL = ["HLA-A", "HLA-B", "HLA-C", "HLA-DQB1", "HLA-DPB1", "HLA-DRB1", "HLA-DRB3", "HLA-DRB4", "HLA-DRB5"];
+
+  /** Linhas da planilha "resultados": amostra, HLA-X_01, HLA-X_02..., fastq_filename.
+   *  Rejeitados/não liberados = NT; pendentes e não tipados = vazio. hemi: {chaveAmostra|locus: 0|1|2} */
+  function resultadoFinal(cons, decisoes, hemi, excluir) {
+    const filtro = (excluir || []).map(x => String(x).trim()).filter(Boolean);
+    const copias = new Map();
+    for (const a of analisarHemizigose(cons, decisoes))
+      for (const lc of HEMI) {
+        const k = a.chave + "|" + lc, v = hemi && hemi[k] !== undefined ? hemi[k] : a.locos[lc].sugestao;
+        copias.set(k, v);
+      }
+    const amostras = new Map();
+    for (const l of cons.linhas) {
+      if (!amostras.has(l.chaveAmostra))
+        amostras.set(l.chaveAmostra, { id: l.id, nome: l.amostra ? l.amostra.nome : (l.engine ? l.engine.amostra : l.id), linhas: {} });
+      amostras.get(l.chaveAmostra).linhas[l.locus] = l;
+    }
+    const cab = ["amostra"];
+    LOCOS_FINAL.forEach(lc => cab.push(lc + "_01", lc + "_02"));
+    cab.push("fastq_filename");
+    const lista = [...amostras.entries()].filter(([, a]) => !filtro.some(x => a.id.includes(x) || a.nome.includes(x)))
+      .sort((x, y) => (x[1].id < y[1].id ? -1 : x[1].id > y[1].id ? 1 : 0));
+    const linhas = [cab];
+    let pendentes = 0;
+    for (const [chave, a] of lista) {
+      const r = [a.id];
+      for (const lc of LOCOS_FINAL) {
+        const l = a.linhas[lc];
+        let al = ["", ""];
+        if (l) {
+          const t = tipagemLiberada(l, decisoes[l.chave]);
+          if (t.estado === "pendente") pendentes++;
+          else al = t.alelos;
+          if (HEMI.includes(lc) && copias.has(chave + "|" + lc)) al = aplicarCopias(al, copias.get(chave + "|" + lc));
+        }
+        r.push(al[0] || "", al[1] || "");
+      }
+      r.push(a.nome);
+      linhas.push(r);
+    }
+    return { linhas, pendentes };
+  }
+
+  // ------------------------------------------------------------------ consenso no formato do app R
+  /** Mesmo arquivo do comparador_engine_vs_assign_report (Shiny), com a única correção pedida:
+   *  o NGSengine entra com ConclusiveTypingResult/Typing/GLString do XML. */
+  function exportarConsensoR(cons) {
+    const trunc = v => (v === null ? null : v.replace(/([A-Z0-9*]+:[A-Za-z0-9]+:[A-Za-z0-9]+):[A-Za-z0-9]+/g, "$1"));
+    const nomeCol = lc => lc.replace(/^HLA-/, "HLA_");
+    const proj = cons.engine.projeto || null;
+    const porId = new Map();
+    for (const l of cons.linhas) {
+      const id = l.chaveAmostra;
+      if (!porId.has(id)) porId.set(id, { id, engine: {}, assign: {}, origem: null, temEngine: false });
+      const r = porId.get(id);
+      if (l.engine) { r.temEngine = true; r.engine[nomeCol(l.locus)] = l.engine.glConclusiva ? l.engine.glConclusiva.replace(/, /g, "+") : null; }
+      if (l.assign) { r.assign[nomeCol(l.locus)] = l.assign.glBruto || null; r.origem = r.origem || l.assign.arquivo.replace(/ /g, ""); }
+    }
+    const locos = [...new Set(cons.linhas.map(l => nomeCol(l.locus)))];
+    const temAssign = cons.linhas.some(l => l.assign);
     const cols = [];
-    locos.forEach(l => {
-      const n = ORDEM_SISHLA.indexOf(l) * 2 + 1;
-      cols.push([`${String(n).padStart(2, "0")}_alelo01_${l}_sishla`, l, 0]);
-      cols.push([`${String(n + 1).padStart(2, "0")}_alelo02_${l}_sishla`, l, 1]);
-    });
-    const cab = ["00_sample_name", ...cols.map(c => c[0]), "fastq_filename", "software_name", "software_version"];
-    const out = [cab];
-    for (let i = 0; i < 4; i++) out.push(cab.map(() => ""));
-    const eng = cons.engine;
-    for (const g of grupos)
-      out.push([g.id, ...cols.map(c => (g.locos[c[1]] || ["", ""])[c[2]]), g.nome, eng.software, eng.versao]);
-    return csv(out);
-  }
-
-  function exportarRedome(cons, decisoes, excluir, dmr) {
-    const grupos = agruparLiberadas(cons, decisoes, excluir);
-    const hoje = new Date();
-    const data = `${String(hoje.getDate()).padStart(2, "0")}/${String(hoje.getMonth() + 1).padStart(2, "0")}/${hoje.getFullYear()}`;
-    const cols = [["01_date_redome", null, null]];
-    ORDEM_REDOME.forEach((l, i) => {
-      cols.push([`${String(i * 2 + 2).padStart(2, "0")}_alelo01_${l}_redome`, l, 0]);
-      cols.push([`${String(i * 2 + 3).padStart(2, "0")}_alelo02_${l}_redome`, l, 1]);
-    });
-    const eng = cons.engine;
-    const valores = g => cols.map(c => (c[1] ? (g.locos[c[1]] || ["", ""])[c[2]] : data));
-    if (!dmr) {
-      const out = [["sample_name", "fastq_filename", "software_name", "software_version", ...cols.map(c => c[0])]];
-      for (const g of grupos) out.push([g.id, g.nome, eng.software, eng.versao, ...valores(g)]);
-      return csv(out);
+    for (const lc of locos) { if (temAssign) cols.push(lc + "_assign"); cols.push(lc + "_engine"); if (temAssign) cols.push(lc + "_status"); }
+    if (temAssign) cols.push("Origem");
+    cols.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    const q = v => (v === null || v === undefined ? "NA" : '"' + String(v).replace(/"/g, '""') + '"');
+    const out = [["project", "id", ...cols].map(q).join(",")];
+    const linhas = [...porId.values()].filter(r => r.temEngine).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const r of linhas) {
+      const val = {};
+      for (const lc of locos) {
+        const e = trunc(r.engine[lc] ?? null), a = trunc(r.assign[lc] ?? null);
+        val[lc + "_engine"] = e;
+        if (temAssign) { val[lc + "_assign"] = a; val[lc + "_status"] = (e ?? "__IS_NA__") === (a ?? "__IS_NA__") ? "match" : "divergence"; }
+      }
+      if (temAssign) val.Origem = r.origem;
+      out.push([q(proj), q(r.id), ...cols.map(c => q(val[c] ?? null))].join(","));
     }
-    // com IL_DMR: mesma ordenação de colunas que o pandas gera após o merge
-    const nomes = ["00_DMR", ...cols.map(c => c[0]), "Patient", "fastq_filename", "sample_name", "software_name", "software_version"];
-    const out = [nomes];
-    for (const g of grupos) {
-      const d = dmr.get(g.id) || dmr.get(chaveId(g.id));
-      out.push([d ? d.dmr : "", ...valores(g), d ? d.patient : "", g.nome, g.id, eng.software, eng.versao]);
-    }
-    return csv(out);
-  }
-
-  /** Lê o CSV IL_DMR (separador ';', latin1) -> Map(Patient -> {patient, dmr}) */
-  function lerDmr(textoCsv) {
-    const linhas = textoCsv.split(/\r?\n/).filter(l => l.trim());
-    const cab = linhas.shift().split(";").map(s => s.replace(/"/g, "").trim());
-    const ip = cab.indexOf("Patient"), id = cab.indexOf("DMR");
-    if (ip < 0 || id < 0) throw new Error("O CSV IL_DMR precisa das colunas Patient e DMR.");
-    const m = new Map();
-    for (const l of linhas) {
-      const c = l.split(";").map(s => s.replace(/"/g, "").trim());
-      m.set(c[ip], { patient: c[ip], dmr: c[id] });
-    }
-    return m;
+    return { nome: `${proj || "Sem_Projeto"}_engine_assign_consensus_report.csv`, conteudo: out.join("\n") + "\n" };
   }
 
   function exportarComparativo(cons, decisoes) {
@@ -1168,10 +1360,22 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     return csv(out);
   }
 
+  /** Mesma chamada do mac_request_api.py (encode_mac): POST da GLString na API MAC do NMDP. */
+  async function codificarMac(glString, imgtVersao, email) {
+    const url = `https://hml.nmdp.org/mac/api/encode?trialRun=false&email=${encodeURIComponent(email)}&imgtHlaRelease=${encodeURIComponent(imgtVersao)}`;
+    const r = await fetch(url, { method: "POST", body: glString });
+    const txt = (await r.text()).trim();
+    if (!r.ok) throw new Error(`API MAC respondeu HTTP ${r.status}${txt ? ": " + txt.slice(0, 160) : ""}`);
+    if (!txt || !/\*/.test(txt)) throw new Error(`resposta inesperada da API MAC: ${txt.slice(0, 160) || "(vazia)"}`);
+    return txt;
+  }
+
   const api = {
+    codificarMac,
     LOCOS, STATUS, LIMITES_PADRAO, enxugarXml, parseXml, lerEngine, lerAssign, reduzirCampos, tresCampos,
     genotiposEngine, genotiposAssign, comparar, avaliarQC, consolidar, tipagemLiberada,
-    exportarSishla, exportarRedome, exportarComparativo, exportarInfoAdicionais, lerDmr, chaveId, csv,
+    analisarHemizigose, aplicarCopias, resultadoFinal, exportarConsensoR, exportarComparativo, exportarInfoAdicionais,
+    chaveId, csv, HEMI, NOME_DR, LOCOS_FINAL,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else raiz.HLA = api;
@@ -1190,13 +1394,15 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
 
   const ROT_CURTO = { identico: "Concordante", principal: "1º genótipo", parcial: "Parcial", campos2: "Só 2 campos", divergente: "Divergente", so_engine: "Só NGSengine", so_assign: "Só Assign", ausente: "não tipado" };
   const ICONE = { identico: "✓", principal: "≈", parcial: "◐", campos2: "2", divergente: "≠", so_engine: "E", so_assign: "A", ausente: "–" };
-  const FONTES = { engine: "NGSengine", assign: "Assign", manual: "Manual", nao_liberar: "Não liberar", nenhuma: "—" };
+  const FONTES = { engine: "NGSengine", assign: "Assign", manual: "Manual", mac: "NGSengine + API MAC", nt: "NT", nao_liberar: "NT", nenhuma: "—" };
+  const LIBERADAS = ["engine", "assign", "manual", "mac"];
+  const EMAIL_MAC_PADRAO = "labhlainca@gmail.com";   // o mesmo usado pelo mac_request_api.py
 
   const E = {
     arquivos: { engine: null, assigns: [], dmr: null },
     engine: null, assigns: [], dmr: null, cons: null,
-    decisoes: {}, desfazer: [],
-    cfg: { limites: {}, ignorarNulos: true, revisarAlertaVermelho: true, excluir: "1044736", avancar: true },
+    decisoes: {}, hemi: {}, desfazer: [],
+    cfg: { limites: {}, ignorarNulos: true, revisarAlertaVermelho: true, rejeitadoNT: true, excluir: "1044736", avancar: true },
     aba: "placa", filtro: "todos", busca: "", aberto: null,
     analista: localStorage.getItem("hlaConsenso:analista") || "",
   };
@@ -1226,7 +1432,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     if (!E.cons) return;
     try {
       localStorage.setItem(CHAVE_LS + E.cons.projeto, JSON.stringify({
-        decisoes: E.decisoes, cfg: E.cfg, atualizado: new Date().toISOString(),
+        decisoes: E.decisoes, hemi: E.hemi, cfg: E.cfg, atualizado: new Date().toISOString(),
       }));
     } catch (e) { console.warn(e); }
   }
@@ -1243,7 +1449,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
         if (ext === "xml") E.arquivos.engine = { nome, texto: await f.text() };
         else if (ext === "xlsx") {
           if (!E.arquivos.assigns.some(a => a.nome === nome)) E.arquivos.assigns.push({ nome, buffer: await f.arrayBuffer() });
-        } else if (ext === "csv") E.arquivos.dmr = { nome, texto: new TextDecoder("latin1").decode(await f.arrayBuffer()) };
+        }
         else if (ext === "zip") {
           const conteudo = await Arquivos.lerZip(await f.arrayBuffer(), n => !n.startsWith("__MACOSX") && /\.(xml|xlsx)$/i.test(n));
           for (const [n, bytes] of Object.entries(conteudo)) {
@@ -1265,7 +1471,6 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     };
     slot("#slot-engine", A.engine ? [A.engine.nome] : []);
     slot("#slot-assign", A.assigns.map(a => a.nome));
-    slot("#slot-dmr", A.dmr ? [A.dmr.nome] : []);
     $("#bt-analisar").disabled = !A.engine;
     $("#dica-inicio").textContent = !A.engine ? "Falta o export do NGSengine." : !A.assigns.length ? "Sem Assign: dá para analisar só o NGSengine, mas sem comparação." : "Tudo pronto.";
   }
@@ -1278,11 +1483,11 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       carregando("Lendo os relatórios do Assign…");
       E.assigns = [];
       for (const a of E.arquivos.assigns) E.assigns.push(HLA.lerAssign(await Arquivos.lerXlsx(a.buffer), a.nome));
-      E.dmr = E.arquivos.dmr ? HLA.lerDmr(E.arquivos.dmr.texto) : null;
       const salvo = lerSalvo(E.engine.projeto);
-      E.decisoes = {};
+      E.decisoes = {}; E.hemi = {};
       if (salvo) {
         E.decisoes = salvo.decisoes || {};
+        E.hemi = salvo.hemi || {};
         Object.assign(E.cfg, salvo.cfg || {});
         if (Object.keys(E.decisoes).length) setTimeout(() => toast(`Retomando a sessão salva: ${Object.keys(E.decisoes).length} decisão(ões) do analista.`), 300);
       }
@@ -1361,6 +1566,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     if (E.aba === "placa") app.innerHTML = renderKpis() + renderPlaca();
     else if (E.aba === "revisao") app.innerHTML = renderKpis() + renderRevisao();
     else if (E.aba === "qualidade") app.innerHTML = renderQualidade();
+    else if (E.aba === "hemi") app.innerHTML = renderHemi();
     else app.innerHTML = renderExportar();
     ligar(app);
     if (E.aba === "qualidade") desenharGraficos();
@@ -1381,6 +1587,8 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       ${as ? `<span class="chip">${h(as.software.replace(/\s*v\.?/i, " "))} · IMGT ${h(iv.va.join(", "))} · ${E.assigns.length} arquivo(s)</span>` : `<span class="chip alerta">sem Assign</span>`}
       ${iv.difere ? `<span class="chip alerta" title="Versões diferentes do banco IMGT/HLA podem explicar divergências de nomenclatura">⚠ IMGT diferente entre softwares</span>` : ""}
       <span class="chip">${eng.amostras.length} amostras</span></div>`;
+    const nh = HLA.analisarHemizigose(E.cons, E.decisoes).reduce((n, a) => n + HLA.HEMI.filter(lc => a.locos[lc].conflito && E.hemi[a.chave + "|" + lc] === undefined).length, 0);
+    const ch = $("#cont-hemi"); if (ch) { ch.textContent = nh; ch.classList.toggle("zero", nh === 0); }
     const np = E.cons.linhas.filter(pendente).length;
     const c = $("#cont-pend");
     c.textContent = np; c.classList.toggle("zero", np === 0);
@@ -1394,12 +1602,13 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const conc = comp.filter(l => l.comp.status === "identico" || l.comp.status === "principal");
     const pend = L.filter(pendente);
     const decididas = L.filter(l => E.decisoes[l.chave]);
-    const liberadas = L.filter(l => { const t = HLA.tipagemLiberada(l, E.decisoes[l.chave]); return ["engine", "assign", "manual"].includes(t.estado); });
+    const liberadas = L.filter(l => LIBERADAS.includes(HLA.tipagemLiberada(l, E.decisoes[l.chave]).estado));
+    const nts = L.filter(l => HLA.tipagemLiberada(l, E.decisoes[l.chave]).estado === "nt");
     const qcErro = tipados.filter(l => l.qcNivel === "erro");
     const novos = L.filter(l => l.qc.some(q => q.metrica === "novo" && q.nivel === "erro"));
     const porStatus = {};
     for (const l of tipados) porStatus[l.comp.status] = (porStatus[l.comp.status] || 0) + 1;
-    return { L, tipados, comp, conc, pend, decididas, liberadas, qcErro, novos, porStatus };
+    return { L, tipados, comp, conc, pend, decididas, liberadas, nts, qcErro, novos, porStatus };
   }
 
   function renderKpis() {
@@ -1410,7 +1619,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     return `<div class="kpis">
       <div class="kpi"><div class="rot">Concordância NGSengine × Assign</div><div class="val">${pct}%</div><div class="det">${c.conc.length} de ${c.comp.length} locos comparáveis</div><div class="barra">${barra}</div></div>
       <div class="kpi clicavel" data-ir="revisao"><div class="rot">Pendentes de decisão</div><div class="val" style="color:${c.pend.length ? "var(--critical)" : "var(--good)"}">${c.pend.length}</div><div class="det">${c.pend.length ? "clique para revisar" : "tudo decidido ✓"}</div></div>
-      <div class="kpi"><div class="rot">Tipagens liberadas</div><div class="val">${c.liberadas.length}</div><div class="det">${c.decididas.length} decididas pelo analista</div></div>
+      <div class="kpi clicavel" data-filtro="rejeitados"><div class="rot">Liberadas · NT</div><div class="val">${c.liberadas.length} · ${c.nts.length}</div><div class="det">${c.decididas.length} decididas pelo analista</div></div>
       <div class="kpi clicavel" data-filtro="qc"><div class="rot">Alertas vermelhos de QC</div><div class="val">${c.qcErro.length}</div><div class="det">locos tipados com métrica crítica</div></div>
       <div class="kpi clicavel" data-filtro="novo"><div class="rot">Possível alelo novo</div><div class="val">${c.novos.length}</div><div class="det">mismatch em éxon (aprovados)</div></div>
       <div class="kpi"><div class="rot">Amostras · locos</div><div class="val">${E.engine.amostras.length} · ${c.tipados.length}</div><div class="det">${E.cons.locos.length} locos no painel</div></div>
@@ -1424,7 +1633,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     if (f === "divergencias") return ["parcial", "campos2", "divergente", "so_engine", "so_assign"].includes(l.comp.status);
     if (f === "qc") return l.qcNivel === "erro" && l.comp.status !== "ausente";
     if (f === "novo") return l.qc.some(q => q.metrica === "novo");
-    if (f === "rejeitados") return l.engine && l.engine.status === "Rejected" && l.comp.status !== "ausente";
+    if (f === "rejeitados") return l.engine && l.engine.status !== "Approved" && !!(l.engine.glConclusiva || l.engine.glResultado);
     return true;
   }
   function amostrasOrdenadas() {
@@ -1441,9 +1650,10 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const ef = efetiva(lin);
     if (!ef) return `<span class="dec pend" title="Pendente de decisão">!</span>`;
     if (ef.fonte === "nenhuma") return "";
+    if (ef.automatica && ef.fonte === "nt") return `<span class="dec nao" title="Rejeitado no NGSengine: sai como NT">NT</span>`;
     if (ef.automatica) return `<span class="dec ok" title="Liberado automaticamente (NGSengine)">auto</span>`;
-    const cls = { engine: "ok", assign: "assign", manual: "manual", nao_liberar: "nao" }[ef.fonte];
-    const txt = { engine: "E", assign: "A", manual: "M", nao_liberar: "✕" }[ef.fonte];
+    const cls = { engine: "ok", assign: "assign", manual: "manual", mac: "ok", nt: "nao", nao_liberar: "nao" }[ef.fonte];
+    const txt = { engine: "E", assign: "A", manual: "M", mac: "MAC", nt: "NT", nao_liberar: "NT" }[ef.fonte];
     return `<span class="dec ${cls}" title="Decisão do analista: ${h(FONTES[ef.fonte])}">${txt}</span>`;
   }
   function alelosCelula(lin) {
@@ -1455,16 +1665,17 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   function celula(lin) {
     if (!lin) return `<td><div class="cel st-ausente" style="cursor:default"><span class="t">—</span></div></td>`;
     const st = lin.comp.status;
+    const estado = HLA.tipagemLiberada(lin, E.decisoes[lin.chave]).estado;
     const vis = linhaVisivel(lin);
-    const rej = lin.engine && lin.engine.status === "Rejected" && st !== "ausente";
+    const rej = lin.engine && lin.engine.status && lin.engine.status !== "Approved" && !!(lin.engine.glConclusiva || lin.engine.glResultado);
     const novo = lin.qc.some(q => q.metrica === "novo" && q.nivel === "erro");
     const qc = st === "ausente" ? "" : lin.qcNivel === "erro" ? `<span class="qcdot erro" title="Alerta vermelho de QC"></span>` : lin.qcNivel === "aviso" ? `<span class="qcdot aviso" title="Alerta amarelo de QC"></span>` : "";
-    const al = st === "ausente" ? [] : alelosCelula(lin);
-    return `<td><button class="cel st-${st}${vis ? "" : " apagada"}${E.aberto === lin.chave ? " sel" : ""}" data-chave="${h(lin.chave)}"
+    const al = st === "ausente" ? [] : estado === "nt" ? ["NT", ""] : alelosCelula(lin);
+    return `<td><button class="cel st-${st}${rej ? " rej" : ""}${lin.semMac && pendente(lin) ? " semmac" : ""}${vis ? "" : " apagada"}${E.aberto === lin.chave ? " sel" : ""}" data-chave="${h(lin.chave)}"
       title="${h(HLA.STATUS[st].rotulo + (rej ? " · rejeitado no NGSengine" : ""))}" aria-label="${h(lin.id + " " + lin.locus + ": " + HLA.STATUS[st].rotulo)}">
       <span class="ico">${novo ? `<span class="qcdot novo" title="Possível alelo novo"></span>` : ""}${qc}${st !== "ausente" ? marcaDecisao(lin) : ""}</span>
       ${st === "ausente" ? `<span class="t">não tipado</span>` : `<span class="t">${h(al[0] || "")}</span><span class="t">${h(al[1] || "")}</span>
-      <span class="stt">${ICONE[st]} ${h(ROT_CURTO[st])}${rej ? " · rej." : ""}</span>`}</button></td>`;
+      <span class="stt">${rej ? "⛔ REJEITADO · " : ""}${ICONE[st]} ${h(ROT_CURTO[st])}</span>`}</button></td>`;
   }
   function renderPlaca() {
     const locos = E.cons.locos;
@@ -1472,7 +1683,8 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const maxReads = Math.max(1, ...E.engine.amostras.map(a => a.readsTotal || 0));
     const filtros = [["todos", "Todos"], ["pendentes", "Pendentes"], ["divergencias", "Divergências"], ["rejeitados", "Rejeitados no NGSengine"], ["qc", "Alerta vermelho"], ["novo", "Alelo novo?"]];
     const legenda = ["identico", "principal", "parcial", "campos2", "divergente", "so_engine", "ausente"]
-      .map(s => `<span><i class="sw st-${s}">${s === "ausente" ? "" : ICONE[s]}</i>${h(s === "so_engine" ? "Só um software" : HLA.STATUS[s].rotulo)}</span>`).join("");
+      .map(s => `<span><i class="sw st-${s}">${s === "ausente" ? "" : ICONE[s]}</i>${h(s === "so_engine" ? "Só um software" : HLA.STATUS[s].rotulo)}</span>`).join("")
+      + `<span><i class="sw rej-sw"></i>Rejeitado no NGSengine (sai NT)</span>`;
     const linhas = amostras.map(a => {
       const am = a.amostra;
       const reads = am && am.readsTotal ? am.readsTotal : 0;
@@ -1539,7 +1751,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const fonteSel = ef ? ef.fonte : null;
     const prev = f => { const t = HLA.tipagemLiberada(lin, { fonte: f, alelo1: d && d.alelo1, alelo2: d && d.alelo2 }); return t.alelos.filter(Boolean).join(" + ") || "—"; };
     const rev = e && e.revisoes.length ? e.revisoes.map(r => `${r.acao === "Approve" ? "aprovado" : r.acao === "Reject" ? "rejeitado" : h(r.acao)} por ${h(r.nome)} (${h(r.nivel)}) ${r.quando ? new Date(r.quando).toLocaleString("pt-BR") : ""}${r.comentario ? " — “" + h(r.comentario) + "”" : ""}`).join("<br>") : "";
-    const temQ = e && /\?/.test((e.nmdp1 || "") + (e.nmdp2 || ""));
+    const temQ = !!lin.semMac;
     const lista = ordemNavegacao(), pos = lista.findIndex(l => l.chave === chave);
     const motivoDecisao = ef && ef.automatica ? `Liberado automaticamente: ${lin.sugestao.motivo}.` : lin.sugestao.motivo;
     p.innerHTML = `
@@ -1585,7 +1797,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
           <button class="opcao" data-fonte="engine" aria-pressed="${fonteSel === "engine"}" ${opc.engine ? "" : "disabled"}><span class="t1">NGSengine <kbd>E</kbd></span><span class="t2">${h(prev("engine"))}</span></button>
           <button class="opcao" data-fonte="assign" aria-pressed="${fonteSel === "assign"}" ${opc.assign ? "" : "disabled"}><span class="t1">Assign <kbd>A</kbd></span><span class="t2">${h(prev("assign"))}</span></button>
           <button class="opcao" data-fonte="manual" aria-pressed="${fonteSel === "manual"}"><span class="t1">Manual <kbd>M</kbd></span><span class="t2">${fonteSel === "manual" ? h(prev("manual")) : "digitar alelos"}</span></button>
-          <button class="opcao" data-fonte="nao_liberar" aria-pressed="${fonteSel === "nao_liberar"}"><span class="t1">Não liberar <kbd>X</kbd></span><span class="t2">repetir / investigar</span></button>
+          <button class="opcao" data-fonte="nt" aria-pressed="${fonteSel === "nt" || fonteSel === "nao_liberar"}"><span class="t1">NT <kbd>X</kbd></span><span class="t2">não tipado no resultado</span></button>
         </div>
         <div class="manual ${fonteSel === "manual" ? "" : "hidden"}" id="caixa-manual">
           <input id="man1" placeholder="alelo 1 (ex.: ${h(lin.locus.replace("HLA-", ""))}*02:01:01)" value="${h(d && d.fonte === "manual" ? d.alelo1 : (opc.engine || opc.assign || [""])[0])}">
@@ -1593,9 +1805,9 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
           <button class="btn primario pequeno" id="salvar-manual">Salvar</button>
         </div>
         <textarea class="obs" id="obs" placeholder="Observação (vai para o relatório de conferência)">${h(d ? d.obs || "" : "")}</textarea>
-        ${temQ ? `<div class="aviso-imgt" style="margin-top:8px">O código NMDP do NGSengine contém “?” (${h(e.nmdp1)} + ${h(e.nmdp2)}). Como no app antigo, dá para gerar o código pela API MAC do NMDP a partir do TypingResult:
-          <div class="manual"><input id="mac-email" placeholder="e-mail exigido pela API MAC" value="${h(localStorage.getItem("hlaConsenso:macEmail") || "")}" style="font-family:var(--sans)"><button class="btn pequeno" id="bt-mac">Consultar API MAC</button></div>
-          <div class="historico" id="mac-res"></div></div>` : ""}
+        ${temQ ? `<div class="aviso-imgt" style="margin-top:8px"><b>Código NMDP incompleto:</b> ${h(e.nmdp1)} + ${h(e.nmdp2)}. Como no app anterior, a ambiguidade (TypingResult/GLString) é enviada à API MAC do NMDP para obter o código.
+          <div class="manual"><input id="mac-email" title="e-mail enviado à API MAC" value="${h(localStorage.getItem("hlaConsenso:macEmail") || EMAIL_MAC_PADRAO)}" style="font-family:var(--sans)"><button class="btn primario pequeno" id="bt-mac">Consultar API MAC</button></div>
+          <div class="historico" id="mac-res">${d && d.fonte === "mac" ? `Código obtido: <span class="mono">${h(d.alelo1)} + ${h(d.alelo2)}</span>` : `IMGT/HLA ${h((e.imgt.match(/\d+\.\d+\.\d+/) || [""])[0])} · ${h(String((e.glResultado || "").length))} caracteres de GLString`}</div></div>` : ""}
         ${d ? `<div class="historico">Decidido por <b>${h(d.usuario)}</b> em ${new Date(d.quando).toLocaleString("pt-BR")} · <a href="#" id="limpar-dec">voltar à sugestão automática</a></div>` : ""}
 
         <div class="rot-pequeno" style="margin-top:16px">Qualidade</div>
@@ -1638,6 +1850,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       return;
     }
     if (fonte === "engine" && !lin.opcoes.engine) return toast("NGSengine não tem tipagem para liberar neste locus.");
+    if (fonte === "engine" && lin.semMac) return toast("O código NMDP do NGSengine está incompleto (“?”): use “Consultar API MAC”.");
     if (fonte === "assign" && !lin.opcoes.assign) return toast("Assign não tem tipagem para liberar neste locus.");
     garantirAnalista(() => {
       decidir(lin, { fonte, obs: ($("#obs") || {}).value || "" });
@@ -1659,27 +1872,24 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const obs = p.querySelector("#obs");
     obs.onchange = () => { const d = E.decisoes[lin.chave]; if (d) { d.obs = obs.value; salvar(); } };
     const bm = p.querySelector("#bt-mac");
-    if (bm) bm.onclick = async () => {
-      const email = p.querySelector("#mac-email").value.trim();
-      if (!email) return toast("Informe o e-mail usado na API MAC.");
+    if (bm) bm.onclick = () => garantirAnalista(async () => {
+      const email = p.querySelector("#mac-email").value.trim() || EMAIL_MAC_PADRAO;
       localStorage.setItem("hlaConsenso:macEmail", email);
       const res = p.querySelector("#mac-res");
-      const imgt = (lin.engine.imgt.match(/\d+\.\d+\.\d+/) || [""])[0];
-      res.textContent = "Consultando…";
+      const imgt = (lin.engine.imgt.match(/\d+\.\d+\.\d+/) || ["3.62.0"])[0];   // mesmo padrão do app anterior
+      bm.disabled = true; res.textContent = "Consultando a API MAC do NMDP…";
       try {
-        const url = `https://hml.nmdp.org/mac/api/encode?trialRun=false&email=${encodeURIComponent(email)}&imgtHlaRelease=${encodeURIComponent(imgt)}`;
-        const r = await fetch(url, { method: "POST", body: lin.engine.glResultado, headers: { "Content-Type": "text/plain" } });
-        const txt = (await r.text()).trim();
-        if (!r.ok || !txt) throw new Error(`HTTP ${r.status}`);
+        const txt = await HLA.codificarMac(lin.engine.glResultado, imgt, email);
         const [a1, a2] = txt.split("+");
-        p.querySelector("#man1").value = a1 || ""; p.querySelector("#man2").value = a2 || "";
-        p.querySelector("#caixa-manual").classList.remove("hidden");
-        res.innerHTML = `Resposta: <span class="mono">${h(txt)}</span> — confira e clique em <b>Salvar</b> na tipagem manual.`;
+        decidir(lin, { fonte: "mac", alelo1: (a1 || "").trim(), alelo2: (a2 || "").trim(), obs: `Código obtido na API MAC (IMGT ${imgt}): ${txt}` });
+        toast(`${lin.id} · ${lin.locus}: ${txt}`);
+        abrirPainel(lin.chave, true);
       } catch (err) {
-        navigator.clipboard && navigator.clipboard.writeText(lin.engine.glResultado).catch(() => {});
-        res.innerHTML = `Não foi possível consultar a API daqui (${h(err.message)}; o servidor do NMDP pode bloquear chamadas de páginas web). A GLString foi copiada para a área de transferência: codifique-a pela ferramenta MAC do NMDP e informe o resultado na opção Manual.`;
+        bm.disabled = false;
+        try { await navigator.clipboard.writeText(lin.engine.glResultado); } catch (e2) { /* sem área de transferência */ }
+        res.innerHTML = `<b>Falha na consulta:</b> ${h(err.message)}. ${/fetch|network|Failed/i.test(err.message) ? "O navegador pode ter sido bloqueado pelo servidor do NMDP (CORS) ou estar sem internet. " : ""}A GLString foi copiada para a área de transferência; se obtiver o código por outro meio, use a opção <b>Manual</b>.`;
       }
-    };
+    });
     const lim = p.querySelector("#limpar-dec");
     if (lim) lim.onclick = ev => { ev.preventDefault(); decidir(lin, null); abrirPainel(lin.chave, true); };
   }
@@ -1709,7 +1919,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
           <div class="tit"><b>${h(locus)} · ${h(desc)}</b><span>${h(ls[0].sugestao.motivo)}</span></div>
           <button class="btn pequeno" data-lote="engine" data-grupo="${h(g)}" ${temE ? "" : "disabled"}>Liberar NGSengine (${ls.length})</button>
           <button class="btn pequeno" data-lote="assign" data-grupo="${h(g)}" ${temA ? "" : "disabled"}>Liberar Assign (${ls.length})</button>
-          <button class="btn pequeno" data-lote="nao_liberar" data-grupo="${h(g)}">Não liberar</button></header>
+          <button class="btn pequeno" data-lote="nt" data-grupo="${h(g)}">NT (${ls.length})</button></header>
           <div class="linhas">${ls.map(l => `<div class="linha-rev" data-chave="${h(l.chave)}"><b>${h(l.id)}</b>
             <div><div class="lbl">NGSengine</div><div class="gl" title="${h(l.engine ? l.engine.glConclusiva : "")}">${h(l.engine ? l.engine.glConclusiva || "—" : "—")}</div>
             <div class="lbl">Assign</div><div class="gl" title="${h(l.assign ? l.assign.gl : "")}">${h(l.assign ? l.assign.gl || "—" : "—")}</div></div></div>`).join("")}</div></section>`;
@@ -1731,6 +1941,40 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
         fecharModal(); render(); toast(`${ls.length} tipagem(ns): ${FONTES[fonte]}`);
       });
     });
+  }
+
+  // ================================================================ DRB3/4/5 (hemizigose)
+  function renderHemi() {
+    const hz = HLA.analisarHemizigose(E.cons, E.decisoes);
+    const sigla = g => ({ "HLA-DRB3": "DR52", "HLA-DRB4": "DR53", "HLA-DRB5": "DR51", nenhum: "sem DRB3/4/5" }[g] || "?");
+    let nAjuste = 0, nConf = 0, nPend = 0;
+    const linhas = hz.map(a => {
+      const cels = HLA.HEMI.map(lc => {
+        const x = a.locos[lc], k = a.chave + "|" + lc;
+        if (!x.tipado && !x.esperado) return `<td class="hz-vazio">—</td>`;
+        const explicito = E.hemi[k] !== undefined, n = explicito ? E.hemi[k] : x.sugestao;
+        if (x.tipado && n === 1 && x.alelos[0] === x.alelos[1]) nAjuste++;
+        if (x.conflito) nConf++;
+        if (x.conflito && !explicito) nPend++;
+        const saida = HLA.aplicarCopias(x.alelos, n).map(v => v || "—").join(" / ");
+        const botao = (v, rot) => `<button data-hemi="${h(k)}" data-n="${v}" aria-pressed="${n === v}" class="${n === v && !explicito ? "sugerido" : ""}">${rot}</button>`;
+        return `<td class="${x.conflito ? "hz-conf" : ""}">
+          <div class="mono">${x.tipado ? h(x.alelos.filter(Boolean).join(" + ")) : "não tipado"}${x.nt ? ` <span class="dec nao">NT</span>` : ""}</div>
+          <div class="hz-esp">${x.esperado === null ? "DRB1 incompleto" : `DRB1 indica <b>${x.esperado}</b> cópia(s)`}</div>
+          <div class="seg hz-seg">${botao(2, "2 alelos")}${botao(1, "1 alelo")}${botao(0, "nenhum")}</div>
+          <div class="hz-saida">→ <span class="mono">${h(saida)}</span>${explicito ? ` <span class="ok-conf">✓ confirmado</span>` : ` <span class="muted">sugestão</span>`}</div>
+          ${x.conflito ? `<div class="hz-alerta">⚠ ${h(x.conflito)}</div>` : x.motivo ? `<div class="hz-motivo">${h(x.motivo)}</div>` : ""}</td>`;
+      }).join("");
+      return `<tr><td class="mono"><b>${h(a.id)}</b></td>
+        <td>${a.drb1.map((al, i) => `<div class="mono">${h(al || "—")} <span class="chip">${h(sigla(a.grupos[i]))}</span></div>`).join("")}</td>${cels}</tr>`;
+    }).join("");
+    return `<div class="cartao" style="margin-bottom:14px"><h3>DRB3, DRB4 e DRB5: quantos alelos liberar</h3>
+      <div class="sub">O NGSengine duplica automaticamente os genes hemizigotos (ex.: <span class="mono">DRB3*02:02:01+DRB3*02:02:01</span>). A sugestão vem da associação com o DRB1: <b>DR52</b> (DRB1*03, 11, 12, 13, 14) → DRB3; <b>DR53</b> (DRB1*04, 07, 09) → DRB4; <b>DR51</b> (DRB1*15, 16) → DRB5; DRB1*01, 08 e 10 não carregam esses genes. Escolha em cada célula o que vai para o resultado final; a borda tracejada indica uma sugestão ainda não confirmada.</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <span class="chip">${hz.length} amostras</span><span class="chip">${nAjuste} duplicação(ões) removida(s)</span>
+        <span class="chip ${nConf ? "alerta" : ""}">${nConf} conflito(s) com o DRB1${nPend ? ` · ${nPend} sem confirmar` : ""}</span>
+        <button class="btn pequeno" id="hemi-aceitar" style="margin-left:auto">Confirmar todas as sugestões</button></div></div>
+      <div class="placa-wrap"><table class="tabela-qc hz"><thead><tr><th>Amostra</th><th>DRB1</th><th>DRB3 (DR52)</th><th>DRB4 (DR53)</th><th>DRB5 (DR51)</th></tr></thead><tbody>${linhas}</tbody></table></div>`;
   }
 
   // ================================================================ qualidade
@@ -1903,28 +2147,31 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const c = contagens(), iv = imgtVersoes();
     const libQC = c.liberadas.filter(l => l.qcNivel === "erro");
     const semAssign = E.engine.amostras.filter(a => !E.cons.linhas.some(l => l.chaveAmostra === a.chave && l.assign && (l.assign.gl || l.assign.alelo1)));
-    const decididasA = Object.keys(E.decisoes).length;
+    const hz = HLA.analisarHemizigose(E.cons, E.decisoes);
+    const confl = hz.flatMap(a => HLA.HEMI.filter(lc => a.locos[lc].conflito && E.hemi[a.chave + "|" + lc] === undefined).map(lc => a.id + " " + lc.replace("HLA-", "")));
+    const ajustes = hz.reduce((n, a) => n + HLA.HEMI.filter(lc => (E.hemi[a.chave + "|" + lc] ?? a.locos[lc].sugestao) === 1 && a.locos[lc].tipado).length, 0);
     const passo = (ok, txt, nivel) => `<li class="${ok ? "" : nivel || "pend"}"><span class="ic">${ok ? "✓" : nivel === "aviso" ? "!" : "✕"}</span><div>${txt}</div></li>`;
+    const b = lote();
     return `<div class="exportar">
       <div class="cartao"><h3>Conferência antes de liberar</h3>
         <ul class="passos" style="margin-top:10px">
-          ${passo(!c.pend.length, c.pend.length ? `<b>${c.pend.length}</b> tipagem(ns) ainda sem decisão — ficam <b>em branco</b> nos arquivos. <a href="#" data-ir="revisao">Revisar</a>` : "Todas as tipagens têm decisão.")}
+          ${passo(!c.pend.length, c.pend.length ? `<b>${c.pend.length}</b> tipagem(ns) ainda sem decisão — ficam <b>em branco</b> no resultado final. <a href="#" data-ir="revisao">Revisar</a>` : "Todas as tipagens têm decisão.")}
+          ${passo(!confl.length, confl.length ? `<b>${confl.length}</b> conflito(s) de DRB3/4/5 × DRB1 sem confirmação (${h(confl.slice(0, 6).join(", "))}${confl.length > 6 ? "…" : ""}). <a href="#" data-ir="hemi">Resolver</a>` : `DRB3/4/5 conferidos com o DRB1 · ${ajustes} locus(i) liberado(s) com 1 alelo (duplicação removida).`, "aviso")}
+          ${passo(true, `${c.nts.length} genótipo(s) rejeitado(s)/não liberado(s) sairão como <b>NT</b>.`)}
           ${passo(!libQC.length, libQC.length ? `<b>${libQC.length}</b> tipagem(ns) liberada(s) com alerta vermelho de QC (${libQC.slice(0, 8).map(l => h(l.id + " " + l.locus.replace("HLA-", ""))).join(", ")}${libQC.length > 8 ? "…" : ""}).` : "Nenhuma tipagem liberada com alerta vermelho.", "aviso")}
           ${passo(!iv.difere, iv.difere ? `Versões IMGT/HLA diferentes: NGSengine ${h(iv.ve.join(", "))} × Assign ${h(iv.va.join(", "))}.` : "Mesma versão IMGT/HLA nos dois softwares (ou Assign ausente).", "aviso")}
           ${passo(!semAssign.length, semAssign.length ? `Amostra(s) sem resultado no Assign: ${semAssign.map(a => h(a.id)).join(", ")}.` : "Todas as amostras do NGSengine têm resultado no Assign.", "aviso")}
-          ${passo(true, `${c.liberadas.length} tipagens liberadas: ${c.liberadas.filter(l => !E.decisoes[l.chave]).length} automáticas (concordantes e aprovadas) + ${c.liberadas.filter(l => E.decisoes[l.chave]).length} por decisão de ${h(E.analista || "analista")}. ${decididasA} decisões registradas no total.`)}
         </ul>
         <div class="campo" style="margin-top:16px">Analista responsável<input type="text" id="cfg-analista" value="${h(E.analista)}" placeholder="Seu nome"></div>
-        <div class="campo">Excluir dos arquivos SISHLA/REDOME as amostras que contenham (separe por vírgula)<input type="text" id="cfg-excluir" value="${h(E.cfg.excluir)}"></div>
-        <div class="campo">IL_DMR para o REDOME: ${E.dmr ? `<b>${h(E.arquivos.dmr.nome)}</b> (${E.dmr.size} pacientes)` : "não carregado"}
-          <div><button class="btn pequeno" id="carregar-dmr">${E.dmr ? "Trocar" : "Carregar"} CSV IL_DMR</button><input type="file" id="arq-dmr" accept=".csv" hidden></div></div>
+        <div class="campo">Excluir do resultado final as amostras que contenham (separe por vírgula)<input type="text" id="cfg-excluir" value="${h(E.cfg.excluir)}"></div>
+        <label style="font-size:13px"><input type="checkbox" id="cfg-nt" ${E.cfg.rejeitadoNT ? "checked" : ""}> Locos rejeitados no NGSengine saem automaticamente como NT</label>
       </div>
-      <div class="cartao"><h3>Arquivos</h3><div class="sub">Mesmo layout do ngsengine_to_sishla_report (separador “;”). A tipagem liberada vem da decisão de cada locus.</div>
+      <div class="cartao"><h3>Arquivos</h3><div class="sub">A tipagem de cada célula vem da decisão do locus e da conferência DRB3/4/5.</div>
         <div class="botoes-export">
           <button class="btn primario" id="exp-zip">📦 Pacote completo (.zip) <span>5 arquivos</span></button>
-          <button class="btn" id="exp-sishla">SISHLA <span class="muted">resultados_${h(lote())}_sishla_format.csv</span></button>
-          <button class="btn" id="exp-redome">REDOME <span class="muted">resultados_${h(lote())}_redome_format.csv</span></button>
-          <button class="btn" id="exp-comp">Relatório comparativo <span class="muted">tipagem a tipagem, com métricas</span></button>
+          <button class="btn" id="exp-final">Resultado final (.xls) <span class="muted">${h(b)}_resultado_final.xls · aba “resultados”</span></button>
+          <button class="btn" id="exp-consenso">Engine × Assign consenso <span class="muted">mesmo formato do app R</span></button>
+          <button class="btn" id="exp-comp">Conferência detalhada <span class="muted">decisões, analista e métricas por tipagem</span></button>
           <button class="btn" id="exp-info">Informações adicionais <span class="muted">métricas por locus</span></button>
           <button class="btn" id="exp-print">🖨 Relatório de conferência <span class="muted">imprimir / PDF</span></button>
         </div>
@@ -1934,21 +2181,26 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       </div></div>`;
   }
   function excluirLista() { return E.cfg.excluir.split(",").map(s => s.trim()).filter(Boolean); }
+  function arquivoFinal() {
+    const r = HLA.resultadoFinal(E.cons, E.decisoes, E.hemi, excluirLista());
+    const larg = [10, ...HLA.LOCOS_FINAL.flatMap(() => [15, 15]), 44];
+    return { nome: `${lote()}_resultado_final.xls`, conteudo: Arquivos.criarXls("resultados", r.linhas, larg) };
+  }
   function arquivosExport() {
-    const b = lote(), ex = excluirLista();
+    const b = lote(), cr = HLA.exportarConsensoR(E.cons);
     return [
-      { nome: `resultados_${b}_sishla_format.csv`, conteudo: HLA.exportarSishla(E.cons, E.decisoes, ex) },
-      { nome: `resultados_${b}_redome_format.csv`, conteudo: HLA.exportarRedome(E.cons, E.decisoes, ex, E.dmr) },
+      arquivoFinal(),
+      { nome: cr.nome, conteudo: cr.conteudo },
+      { nome: `${b}_conferencia_detalhada.csv`, conteudo: HLA.exportarComparativo(E.cons, E.decisoes) },
       { nome: `resultados_${b}_informacoes_adicionais.csv`, conteudo: HLA.exportarInfoAdicionais(E.cons) },
-      { nome: `${b}_engine_assign_consenso.csv`, conteudo: HLA.exportarComparativo(E.cons, E.decisoes) },
       { nome: `${b}_sessao_decisoes.json`, conteudo: JSON.stringify(sessao(), null, 2) },
     ];
   }
-  function sessao() { return { app: "HLA Consenso", versao: 1, projeto: E.cons.projeto, analista: E.analista, exportadoEm: new Date().toISOString(), cfg: E.cfg, decisoes: E.decisoes }; }
+  function sessao() { return { app: "HLA Consenso", versao: 2, projeto: E.cons.projeto, analista: E.analista, exportadoEm: new Date().toISOString(), cfg: E.cfg, decisoes: E.decisoes, hemi: E.hemi }; }
   function confirmarPendencias(acao) {
     const n = E.cons.linhas.filter(pendente).length;
     if (!n) return acao();
-    modal(`<h2>Há ${n} tipagem(ns) sem decisão</h2><p class="sec">Elas sairão em branco nos arquivos SISHLA/REDOME. Deseja exportar mesmo assim?</p>
+    modal(`<h2>Há ${n} tipagem(ns) sem decisão</h2><p class="sec">Elas sairão em branco no resultado final. Deseja exportar mesmo assim?</p>
       <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="ir-rev">Revisar pendências</button><button class="btn primario" id="exp-mesmo">Exportar assim</button></div>`, m => {
       m.querySelector("#ir-rev").onclick = () => { fecharModal(); E.aba = "revisao"; render(); };
       m.querySelector("#exp-mesmo").onclick = () => { fecharModal(); acao(); };
@@ -1957,15 +2209,15 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
   function imprimirRelatorio() {
     const c = contagens(), locos = E.cons.locos;
     const amostras = amostrasOrdenadas();
-    const marca = l => { const ef = efetiva(l); return !ef ? " [pendente]" : ef.fonte === "assign" ? " ᴬ" : ef.fonte === "manual" ? " ᴹ" : ef.fonte === "nao_liberar" ? " [não liberado]" : ""; };
+    const marca = l => { const ef = efetiva(l); return !ef ? " [pendente]" : ef.fonte === "assign" ? " ᴬ" : ef.fonte === "manual" ? " ᴹ" : ef.fonte === "mac" ? " ᴹᴬᶜ" : ""; };
     const decisoes = E.cons.linhas.filter(l => E.decisoes[l.chave]);
     $("#relatorio").innerHTML = `<h1>Relatório de conferência NGSengine × Assign — ${h(E.cons.projeto)}</h1>
       <div>${h(E.engine.software)} ${h(E.engine.versao)} · ${E.assigns[0] ? h(E.assigns[0].software) + " · " + h(E.assigns[0].referencia) : "sem Assign"} · Gerado em ${new Date().toLocaleString("pt-BR")} por ${h(E.analista || "—")}</div>
       <div>Concordância: ${c.conc.length}/${c.comp.length} locos comparáveis · ${c.liberadas.length} tipagens liberadas · ${c.pend.length} pendentes · ${decisoes.length} decisões do analista</div>
       <table><thead><tr><th>Amostra</th>${locos.map(l => `<th>${h(l.replace("HLA-", ""))}</th>`).join("")}</tr></thead><tbody>
-      ${amostras.map(a => `<tr><td class="mono">${h(a.id)}</td>${locos.map(lc => { const l = a.linhas[lc]; if (!l || l.comp.status === "ausente") return "<td></td>"; const t = HLA.tipagemLiberada(l, E.decisoes[l.chave]); return `<td class="mono">${h(t.alelos.filter(Boolean).map(semPrefixo).join(" / "))}${h(marca(l))}<br><span style="color:#666">${h(ROT_CURTO[l.comp.status])}</span></td>`; }).join("")}</tr>`).join("")}
+      ${(() => { const rf = HLA.resultadoFinal(E.cons, E.decisoes, E.hemi, []).linhas; const idx = new Map(rf.slice(1).map(r => [r[0], r])); return amostras.map(a => `<tr><td class="mono">${h(a.id)}</td>${locos.map(lc => { const l = a.linhas[lc]; const r = idx.get(a.id); const ci = HLA.LOCOS_FINAL.indexOf(lc); if (!l || !r || ci < 0) return "<td></td>"; const v = [r[1 + 2 * ci], r[2 + 2 * ci]].filter(Boolean).map(semPrefixo).join(" / "); return `<td class="mono">${h(v)}${v ? h(marca(l)) : ""}<br><span style="color:#666">${l.comp.status === "ausente" ? "" : h(ROT_CURTO[l.comp.status])}</span></td>`; }).join("")}</tr>`).join(""); })()}
       </tbody></table>
-      <p style="font-size:9px">ᴬ liberado pelo Assign · ᴹ tipagem manual · demais: NGSengine (NMDPCodes reduzidos a 3 campos)</p>
+      <p style="font-size:9px">ᴬ liberado pelo Assign · ᴹ tipagem manual · ᴹᴬᶜ código obtido na API MAC · NT = não tipado (rejeitado/não liberado) · DRB3/4/5 conforme a conferência de hemizigose · demais: NGSengine (NMDPCodes reduzidos a 3 campos)</p>
       ${decisoes.length ? `<h1 style="margin-top:14px">Decisões do analista</h1><table><thead><tr><th>Amostra</th><th>Locus</th><th>Situação</th><th>NGSengine</th><th>Assign</th><th>Decisão</th><th>Liberado</th><th>Por / quando</th><th>Observação</th></tr></thead><tbody>
       ${decisoes.map(l => { const d = E.decisoes[l.chave], t = HLA.tipagemLiberada(l, d); return `<tr><td class="mono">${h(l.id)}</td><td>${h(l.locus)}</td><td>${h(HLA.STATUS[l.comp.status].rotulo)}${l.engine && l.engine.status !== "Approved" ? " (NGSengine: " + h(l.engine.status) + ")" : ""}</td><td class="mono">${h(l.engine ? l.engine.glConclusiva : "")}</td><td class="mono">${h(l.assign ? l.assign.gl : "")}</td><td>${h(FONTES[d.fonte])}</td><td class="mono">${h(t.alelos.filter(Boolean).join(" + "))}</td><td>${h(d.usuario)}<br>${new Date(d.quando).toLocaleString("pt-BR")}</td><td>${h(d.obs || "")}</td></tr>`; }).join("")}</tbody></table>` : ""}
       <div class="assin"><div>Analista</div><div>Responsável técnico</div></div>`;
@@ -1991,32 +2243,41 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const an = app.querySelector("#cfg-analista"); if (an) an.onchange = () => { E.analista = an.value.trim(); localStorage.setItem("hlaConsenso:analista", E.analista); };
     const exc = app.querySelector("#cfg-excluir"); if (exc) exc.onchange = () => { E.cfg.excluir = exc.value; salvar(); };
     const bind = (id, fn) => { const b = app.querySelector(id); if (b) b.onclick = fn; };
-    bind("#exp-zip", () => confirmarPendencias(() => baixar(Arquivos.criarZip(arquivosExport()), `relatorios_completos_${lote()}.zip`)));
-    bind("#exp-sishla", () => confirmarPendencias(() => { const a = arquivosExport()[0]; baixar(a.conteudo, a.nome); }));
-    bind("#exp-redome", () => confirmarPendencias(() => { const a = arquivosExport()[1]; baixar(a.conteudo, a.nome); }));
-    bind("#exp-info", () => { const a = arquivosExport()[2]; baixar(a.conteudo, a.nome); });
-    bind("#exp-comp", () => { const a = arquivosExport()[3]; baixar(a.conteudo, a.nome); });
+    bind("#exp-zip", () => confirmarPendencias(async () => {
+      const arqs = arquivosExport();
+      for (const x of arqs) if (x.conteudo instanceof Blob) x.conteudo = new Uint8Array(await x.conteudo.arrayBuffer());
+      baixar(Arquivos.criarZip(arqs), `relatorios_completos_${lote()}.zip`);
+    }));
+    bind("#exp-final", () => confirmarPendencias(() => { const a = arquivoFinal(); baixar(a.conteudo, a.nome); }));
+    bind("#exp-consenso", () => { const a = HLA.exportarConsensoR(E.cons); baixar(a.conteudo, a.nome); });
+    bind("#exp-comp", () => { const a = arquivosExport()[2]; baixar(a.conteudo, a.nome); });
+    bind("#exp-info", () => { const a = arquivosExport()[3]; baixar(a.conteudo, a.nome); });
     bind("#exp-print", imprimirRelatorio);
     bind("#exp-sessao", () => baixar(JSON.stringify(sessao(), null, 2), `${lote()}_sessao_decisoes.json`, "application/json"));
     bind("#imp-sessao", () => app.querySelector("#arq-sessao").click());
-    bind("#carregar-dmr", () => app.querySelector("#arq-dmr").click());
     bind("#limpar-sessao", () => modal(`<h2>Apagar as decisões desta corrida?</h2><p class="sec">As ${Object.keys(E.decisoes).length} decisões do analista serão removidas deste navegador. As sugestões automáticas continuam.</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="nao">Cancelar</button><button class="btn primario" id="sim">Apagar</button></div>`, m => {
       m.querySelector("#nao").onclick = fecharModal;
-      m.querySelector("#sim").onclick = () => { E.decisoes = {}; salvar(); fecharModal(); render(); toast("Decisões apagadas."); };
+      m.querySelector("#sim").onclick = () => { E.decisoes = {}; E.hemi = {}; salvar(); fecharModal(); render(); toast("Decisões apagadas."); };
     }));
     const as = app.querySelector("#arq-sessao");
     if (as) as.onchange = async () => {
       try {
         const s = JSON.parse(await as.files[0].text());
-        const aplicar = () => { E.decisoes = s.decisoes || {}; if (s.cfg) Object.assign(E.cfg, s.cfg); recalcular(); salvar(); render(); toast(`Sessão importada: ${Object.keys(E.decisoes).length} decisões.`); };
+        const aplicar = () => { E.decisoes = s.decisoes || {}; E.hemi = s.hemi || {}; if (s.cfg) Object.assign(E.cfg, s.cfg); recalcular(); salvar(); render(); toast(`Sessão importada: ${Object.keys(E.decisoes).length} decisões.`); };
         if (s.projeto && s.projeto !== E.cons.projeto) modal(`<h2>Sessão de outra corrida</h2><p>O arquivo é da corrida <b>${h(s.projeto)}</b>, mas a aberta é <b>${h(E.cons.projeto)}</b>. Importar mesmo assim?</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="nao">Cancelar</button><button class="btn primario" id="sim">Importar</button></div>`, m => { m.querySelector("#nao").onclick = fecharModal; m.querySelector("#sim").onclick = () => { fecharModal(); aplicar(); }; });
         else aplicar();
       } catch (e) { toast("Arquivo de sessão inválido."); }
     };
-    const ad = app.querySelector("#arq-dmr");
-    if (ad) ad.onchange = async () => {
-      try { const f = ad.files[0]; const t = new TextDecoder("latin1").decode(await f.arrayBuffer()); E.dmr = HLA.lerDmr(t); E.arquivos.dmr = { nome: f.name, texto: t }; render(); toast("IL_DMR carregado."); }
-      catch (e) { toast(e.message); }
+    chk("#cfg-nt", "rejeitadoNT");
+    app.querySelectorAll("[data-hemi]").forEach(bt => bt.onclick = () => {
+      E.hemi[bt.dataset.hemi] = +bt.dataset.n; salvar(); render();
+    });
+    const aceitar = app.querySelector("#hemi-aceitar");
+    if (aceitar) aceitar.onclick = () => {
+      for (const a of HLA.analisarHemizigose(E.cons, E.decisoes)) for (const lc of HLA.HEMI) {
+        const k = a.chave + "|" + lc; if (E.hemi[k] === undefined && (a.locos[lc].tipado || a.locos[lc].esperado)) E.hemi[k] = a.locos[lc].sugestao;
+      }
+      salvar(); render(); toast("Sugestões confirmadas.");
     };
   }
 
@@ -2035,7 +2296,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
     const lin = E.porChave.get(E.aberto);
     if (k === "j" || k === "arrowdown") { ev.preventDefault(); return navegar(1); }
     if (k === "k" || k === "arrowup") { ev.preventDefault(); return navegar(-1); }
-    const mapa = { e: "engine", 1: "engine", a: "assign", 2: "assign", m: "manual", 3: "manual", x: "nao_liberar", 4: "nao_liberar" };
+    const mapa = { e: "engine", 1: "engine", a: "assign", 2: "assign", m: "manual", 3: "manual", x: "nt", 4: "nt" };
     if (mapa[k]) { ev.preventDefault(); escolher(lin, mapa[k]); }
   });
   function mostrarAtalhos() {
@@ -2044,7 +2305,7 @@ svg.graf .alvo { fill: transparent; cursor: pointer; }
       <kbd>E</kbd> / <kbd>1</kbd><span>liberar a tipagem do NGSengine</span>
       <kbd>A</kbd> / <kbd>2</kbd><span>liberar a tipagem do Assign</span>
       <kbd>M</kbd> / <kbd>3</kbd><span>digitar a tipagem manualmente</span>
-      <kbd>X</kbd> / <kbd>4</kbd><span>não liberar (repetir/investigar)</span>
+      <kbd>X</kbd> / <kbd>4</kbd><span>NT (não tipado no resultado final)</span>
       <kbd>J</kbd> / <kbd>↓</kbd><span>próxima tipagem</span>
       <kbd>K</kbd> / <kbd>↑</kbd><span>tipagem anterior</span>
       <kbd>Ctrl</kbd>+<kbd>Z</kbd><span>desfazer a última decisão</span>
