@@ -139,7 +139,7 @@ main { padding: 18px 20px 60px; max-width: 1600px; margin: 0 auto; }
 
 /* status — fundo/ícone */
 .st-identico   { --c: var(--good);     --cs: var(--good-soft); }
-.st-principal  { --c: var(--good-2, #63c163); --cs: var(--good-soft); }
+.st-principal  { --c: var(--warning);  --cs: var(--warning-soft); }
 .st-parcial    { --c: var(--warning);  --cs: var(--warning-soft); }
 .st-campos2    { --c: var(--serious);  --cs: var(--serious-soft); }
 .st-divergente { --c: var(--critical); --cs: var(--critical-soft); }
@@ -362,6 +362,16 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
 .ref-tab tr { cursor: default; }
 @media (max-width: 1100px) { .ref-grade { grid-template-columns: 1fr; } }
 
+/* ---------------------------------------------------------------- desequilíbrio de ligação */
+.ld-chip { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
+.ld-chip.ld-ok { background: var(--good-soft); border-color: var(--good); }
+.ld-chip.ld-aviso { background: var(--warning-soft); border-color: var(--warning); }
+.ld-chip.ld-erro { background: var(--critical-soft); border-color: var(--critical); }
+.ld-hap { font-size: 12px; margin-top: 2px; }
+.ld-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+.ld-tabela-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.ld-tab tr { cursor: default; }
+
 </style>
 </head>
 <body>
@@ -375,6 +385,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     <button role="tab" data-aba="placa" aria-selected="true">Placa</button>
     <button role="tab" data-aba="revisao">Revisão <span class="cont" id="cont-pend">0</span></button>
     <button role="tab" data-aba="hemi">DRB3/4/5 <span class="cont" id="cont-hemi">0</span></button>
+    <button role="tab" data-aba="ld">Ligação</button>
     <button role="tab" data-aba="qualidade">Qualidade</button>
     <button role="tab" data-aba="exportar">Exportar</button>
   </nav>
@@ -691,9 +702,346 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     return new Blob([arq], { type: "application/vnd.ms-excel" });
   }
 
-  const api = { lerZip, lerXlsx, criarZip, criarXls, desescapar };
+
+  // ------------------------------------------------------------------ leitura de .xls (BIFF8 / Excel 97-2003)
+  function lerCfb(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const assin = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    if (!assin.every((b, i) => u8[i] === b)) throw new Error("não é um arquivo Excel 97-2003 (.xls)");
+    const SEC = 1 << dv.getUint16(30, true), MINI = 1 << dv.getUint16(32, true);
+    const nFat = dv.getUint32(44, true), dir0 = dv.getInt32(48, true), corte = dv.getUint32(56, true);
+    const miniFat0 = dv.getInt32(60, true), difat0 = dv.getInt32(68, true);
+    const off = s => (s + 1) * SEC;
+    const fatSecs = [];
+    for (let i = 0; i < 109 && fatSecs.length < nFat; i++) { const v = dv.getInt32(76 + 4 * i, true); if (v >= 0) fatSecs.push(v); }
+    for (let d = difat0, g = 0; d >= 0 && fatSecs.length < nFat && g < 10000; g++) {
+      for (let i = 0; i < SEC / 4 - 1 && fatSecs.length < nFat; i++) { const v = dv.getInt32(off(d) + 4 * i, true); if (v >= 0) fatSecs.push(v); }
+      d = dv.getInt32(off(d) + SEC - 4, true);
+    }
+    const fat = [];
+    for (const f of fatSecs) for (let i = 0; i < SEC / 4; i++) fat.push(dv.getInt32(off(f) + 4 * i, true));
+    const cadeia = (ini, tab) => { const c = []; for (let s = ini, g = 0; s >= 0 && g < 1e6; g++) { c.push(s); s = tab[s]; } return c; };
+    const lerStream = (ini, tam) => { const out = new Uint8Array(tam); let o = 0; for (const s of cadeia(ini, fat)) { const n = Math.min(SEC, tam - o); if (n <= 0) break; out.set(u8.subarray(off(s), off(s) + n), o); o += n; } return out; };
+    // diretório
+    const dirBytes = (() => { const c = cadeia(dir0, fat); const out = new Uint8Array(c.length * SEC); c.forEach((s, i) => out.set(u8.subarray(off(s), off(s) + SEC), i * SEC)); return out; })();
+    const ddv = new DataView(dirBytes.buffer);
+    const entradas = [];
+    for (let o = 0; o + 128 <= dirBytes.length; o += 128) {
+      const n = ddv.getUint16(o + 64, true);
+      let nome = ""; for (let i = 0; i < Math.max(0, n / 2 - 1); i++) nome += String.fromCharCode(ddv.getUint16(o + 2 * i, true));
+      entradas.push({ nome, tipo: dirBytes[o + 66], ini: ddv.getInt32(o + 116, true), tam: ddv.getUint32(o + 120, true) });
+    }
+    const raiz = entradas.find(e => e.tipo === 5);
+    const wb = entradas.find(e => e.tipo === 2 && /^(Workbook|Book)$/i.test(e.nome));
+    if (!wb) throw new Error("planilha sem o fluxo 'Workbook'");
+    if (wb.tam >= corte) return lerStream(wb.ini, wb.tam);
+    // fluxo pequeno: mini-stream
+    const miniFat = [];
+    for (const s of cadeia(miniFat0, fat)) for (let i = 0; i < SEC / 4; i++) miniFat.push(dv.getInt32(off(s) + 4 * i, true));
+    const miniStream = lerStream(raiz.ini, raiz.tam);
+    const out = new Uint8Array(wb.tam); let o = 0;
+    for (const s of cadeia(wb.ini, miniFat)) { const n = Math.min(MINI, wb.tam - o); if (n <= 0) break; out.set(miniStream.subarray(s * MINI, s * MINI + n), o); o += n; }
+    return out;
+  }
+
+  function rkParaNumero(rk) {
+    let v;
+    if (rk & 2) v = rk >> 2;
+    else { const b = new DataView(new ArrayBuffer(8)); b.setUint32(4, rk & 0xFFFFFFFC, true); b.setUint32(0, 0, true); v = b.getFloat64(0, true); }
+    return rk & 1 ? v / 100 : v;
+  }
+  const numTexto = v => (Number.isInteger(v) ? String(v) : String(+v.toPrecision(15)));
+
+  /** Lê um .xls (BIFF8). Retorna {nomeDaAba: [[células como texto]]} */
+  function lerXls(buffer) {
+    const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const wb = lerCfb(u8);
+    const dv = new DataView(wb.buffer, wb.byteOffset, wb.byteLength);
+    // registros, juntando CONTINUE ao registro anterior (guardando onde cada pedaço começa)
+    const regs = [];
+    for (let o = 0; o + 4 <= wb.length;) {
+      const tipo = dv.getUint16(o, true), tam = dv.getUint16(o + 2, true);
+      const dados = wb.subarray(o + 4, o + 4 + tam);
+      if (tipo === 0x003C && regs.length) { const r = regs[regs.length - 1]; r.pedacos.push(dados); }
+      else regs.push({ tipo, pos: o, dados, pedacos: [dados] });
+      o += 4 + tam;
+    }
+    const dec16 = (b, i, n) => { let s = ""; for (let k = 0; k < n; k++) s += String.fromCharCode(b[i + 2 * k] | (b[i + 2 * k + 1] << 8)); return s; };
+    const dec8 = (b, i, n) => { let s = ""; for (let k = 0; k < n; k++) s += String.fromCharCode(b[i + k]); return s; };
+    // SST com quebras de CONTINUE
+    let sst = [];
+    const regSst = regs.find(r => r.tipo === 0x00FC);
+    if (regSst) {
+      const P = regSst.pedacos; let pi = 0, b = P[0], i = 8;
+      const total = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(4, true);
+      const garantir = n => { if (i + n > b.length && pi + 1 < P.length) { pi++; b = P[pi]; i = 0; } };
+      const u16 = () => { garantir(2); const v = b[i] | (b[i + 1] << 8); i += 2; return v; };
+      const u32 = () => { garantir(4); const v = (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)) + b[i + 3] * 16777216; i += 4; return v; };
+      for (let k = 0; k < total; k++) {
+        if (i >= b.length) { if (pi + 1 >= P.length) break; pi++; b = P[pi]; i = 0; }
+        let cch = u16(); garantir(1); let flags = b[i++];
+        const rico = flags & 8 ? u16() : 0, ext = flags & 4 ? u32() : 0;
+        let s = "";
+        while (cch > 0) {
+          if (i >= b.length) { pi++; b = P[pi]; i = 0; flags = b[i++]; }   // continuação: novo byte de opções
+          const larg = flags & 1 ? 2 : 1, cabe = Math.min(cch, Math.floor((b.length - i) / larg));
+          s += larg === 2 ? dec16(b, i, cabe) : dec8(b, i, cabe);
+          i += cabe * larg; cch -= cabe;
+        }
+        let pular = rico * 4 + ext;
+        while (pular > 0) { if (i >= b.length) { pi++; if (pi >= P.length) break; b = P[pi]; i = 0; } const n = Math.min(pular, b.length - i); i += n; pular -= n; }
+        sst.push(s);
+      }
+    }
+    const strB8 = (b, i) => { const n = b[i] | (b[i + 1] << 8), f = b[i + 2]; return f & 1 ? dec16(b, i + 3, n) : dec8(b, i + 3, n); };
+    const abas = [];
+    for (const r of regs) if (r.tipo === 0x0085) {
+      const d = r.dados, ddv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+      const n = d[6], f = d[7];
+      abas.push({ nome: f & 1 ? dec16(d, 8, n) : dec8(d, 8, n), pos: ddv.getUint32(0, true), tipo: d[5] });
+    }
+    const saida = {};
+    for (const aba of abas) {
+      if (aba.tipo !== 0) continue;
+      const linhas = [];
+      const por = (rw, col, v) => { (linhas[rw] = linhas[rw] || [])[col] = v; };
+      let idx = regs.findIndex(r => r.pos === aba.pos);
+      let ultimaFormula = null;
+      for (let k = idx + 1; k > 0 && k < regs.length; k++) {
+        const r = regs[k], d = r.dados, x = new DataView(d.buffer, d.byteOffset, d.byteLength);
+        if (r.tipo === 0x000A) break;
+        if (r.tipo === 0x00FD) por(x.getUint16(0, true), x.getUint16(2, true), sst[x.getUint32(6, true)] ?? "");
+        else if (r.tipo === 0x0204) por(x.getUint16(0, true), x.getUint16(2, true), strB8(d, 6));
+        else if (r.tipo === 0x0203) por(x.getUint16(0, true), x.getUint16(2, true), numTexto(x.getFloat64(6, true)));
+        else if (r.tipo === 0x027E) por(x.getUint16(0, true), x.getUint16(2, true), numTexto(rkParaNumero(x.getUint32(6, true))));
+        else if (r.tipo === 0x00BD) {
+          const rw = x.getUint16(0, true), c0 = x.getUint16(2, true), n = (d.length - 6) / 6;
+          for (let j = 0; j < n; j++) por(rw, c0 + j, numTexto(rkParaNumero(x.getUint32(4 + 6 * j + 2, true))));
+        } else if (r.tipo === 0x0006) {
+          const rw = x.getUint16(0, true), col = x.getUint16(2, true);
+          if (x.getUint16(12, true) === 0xFFFF) { ultimaFormula = [rw, col]; if (d[6] !== 0) por(rw, col, ""); }
+          else por(rw, col, numTexto(x.getFloat64(6, true)));
+        } else if (r.tipo === 0x0207 && ultimaFormula) { por(ultimaFormula[0], ultimaFormula[1], strB8(d, 0)); ultimaFormula = null; }
+      }
+      for (let ri = 0; ri < linhas.length; ri++) { linhas[ri] = linhas[ri] || []; for (let c = 0; c < linhas[ri].length; c++) if (linhas[ri][c] === undefined) linhas[ri][c] = ""; }
+      saida[aba.nome] = linhas;
+    }
+    return saida;
+  }
+
+  const api = { lerZip, lerXlsx, lerXls, criarZip, criarXls, desescapar };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else raiz.Arquivos = api;
+})(typeof self !== "undefined" ? self : this);
+
+</script>
+<script>
+/* HLA Consenso — desequilíbrio de ligação (DRB1~DQB1 e B~C).
+   1) lê o legado (arquivos *_resultado_final: amostra, HLA-X_01, HLA-X_02...)
+   2) estima frequências de haplótipos por EM (fase desconhecida; códigos MAC como ambiguidade)
+   3) checa genótipos novos contra a referência. Funciona no navegador e no Node. */
+(function (raiz) {
+  "use strict";
+
+  const PARES = [
+    { id: "DRB1~DQB1", locos: ["HLA-DRB1", "HLA-DQB1"] },
+    { id: "B~C", locos: ["HLA-B", "HLA-C"] },
+  ];
+  const LOCOS_LD = [...new Set(PARES.flatMap(p => p.locos))];
+
+  // ---------------------------------------------------------------- nomenclatura
+  /** Normaliza uma célula para 2 campos. Retorna null (vazio/NT), {mac, f1} ou {alelo}. */
+  function normalizar(locus, valor) {
+    let v = String(valor ?? "").trim().replace(/^HLA-/i, "").replace(/\s+/g, "");
+    if (!v || /^(NT|NA|N\/A|-+|—)$/i.test(v)) return null;
+    const gene = locus.replace(/^HLA-/, "");
+    if (!v.includes("*")) v = gene + "*" + v;
+    let [g, resto] = v.split("*");
+    if (!resto || g.toUpperCase() !== gene.toUpperCase()) return null;
+    resto = resto.toUpperCase();
+    let suf = "";
+    if (/^\d+:\d+(:\d+)*[GP]$/.test(resto)) resto = resto.slice(0, -1);            // grupo G/P -> 2 campos
+    else if (/^\d+:\d+(:\d+)*[NLSCAQ]$/.test(resto)) { suf = resto.slice(-1); resto = resto.slice(0, -1); }
+    const campos = resto.split(":");
+    const f1 = campos[0].padStart(2, "0");
+    if (campos.length < 2 || !/^\d+$/.test(campos[1]))
+      return { mac: true, f1, bruto: v, alelo: `${gene}*${f1}:${campos[1] || "XX"}` };
+    return { alelo: `${gene}*${f1}:${campos[1]}${suf}` };
+  }
+
+  // ---------------------------------------------------------------- leitura do legado
+  /** arquivos: [{nome, linhas}] (linhas = matriz de texto). */
+  function lerLegado(arquivos) {
+    const st = { arquivos: 0, arquivosSemCabecalho: [], linhas: 0, familiasControles: 0, semId: 0, duplicadosDescartados: 0, ntCelulas: 0, mac: 0 };
+    const amostras = new Map();
+    const ordem = [...arquivos].sort((a, b) => a.nome.localeCompare(b.nome, undefined, { numeric: true }));
+    for (const arq of ordem) {
+      const L = arq.linhas;
+      const ih = L.findIndex(r => r && r.some(c => /^amostra$/i.test(String(c || "").trim())));
+      if (ih < 0) { st.arquivosSemCabecalho.push(arq.nome); continue; }
+      st.arquivos++;
+      const cab = L[ih].map(c => String(c || "").trim());
+      const iId = cab.findIndex(c => /^amostra$/i.test(c));
+      const colunas = {};
+      cab.forEach((c, i) => { const m = /^(HLA-[A-Z0-9]+)_0?([12])$/i.exec(c); if (m) (colunas[m[1].toUpperCase()] = colunas[m[1].toUpperCase()] || [])[+m[2] - 1] = i; });
+      for (let r = ih + 1; r < L.length; r++) {
+        const row = L[r] || [];
+        const id = String(row[iId] ?? "").trim();
+        if (!id) { if (row.some(c => String(c || "").trim())) st.semId++; continue; }
+        st.linhas++;
+        if (!/^\d+$/.test(id)) { st.familiasControles++; continue; }
+        const alelos = {};
+        let completude = 0;
+        for (const [lc, [c1, c2]] of Object.entries(colunas)) {
+          const v1 = c1 !== undefined ? String(row[c1] ?? "").trim() : "", v2 = c2 !== undefined ? String(row[c2] ?? "").trim() : "";
+          if (/^NT$/i.test(v1) || /^NT$/i.test(v2)) st.ntCelulas++;
+          alelos[lc] = [v1, v2];
+          completude += [v1, v2].filter(v => v && !/^NT$/i.test(v)).length;
+        }
+        const chave = id.replace(/^0+/, "") || "0";
+        const ant = amostras.get(chave);
+        if (ant) {
+          st.duplicadosDescartados++;
+          if (completude < ant.completude) continue;   // fica a mais completa (empate: a mais recente)
+        }
+        amostras.set(chave, { id, arquivo: arq.nome, alelos, completude });
+      }
+    }
+    st.doadores = amostras.size;
+    return { amostras: [...amostras.values()], estatisticas: st };
+  }
+
+  // ---------------------------------------------------------------- genótipo de um locus
+  /** [v1, v2] -> lista de 2 conjuntos de alelos candidatos, ou null. Um alelo só = homozigoto. */
+  function genotipoLocus(locus, par, universo) {
+    if (par.some(v => /^\s*NT\s*$/i.test(String(v ?? "")))) return null;      // NT em qualquer célula: locus descartado
+    const a = par.map(v => normalizar(locus, v)).filter(Boolean);
+    if (!a.length) return null;
+    if (a.length === 1) a.push(a[0]);
+    return a.map(x => {
+      if (!x.mac) return [x.alelo];
+      const cand = universo ? [...universo].filter(u => u.split("*")[1].split(":")[0] === x.f1) : [];
+      return cand.length ? cand : [x.alelo];
+    });
+  }
+
+  function paresHaplotipos(g1, g2) {
+    const vistos = new Set(), out = [];
+    for (const x1 of g1[0]) for (const x2 of g1[1]) for (const y1 of g2[0]) for (const y2 of g2[1]) {
+      for (const [h1, h2] of [[x1 + "~" + y1, x2 + "~" + y2], [x1 + "~" + y2, x2 + "~" + y1]]) {
+        const k = h1 < h2 ? h1 + "|" + h2 : h2 + "|" + h1;
+        if (!vistos.has(k)) { vistos.add(k); out.push([h1, h2]); }
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- EM
+  function em(individuos, maxIter, tol) {
+    maxIter = maxIter || 3000; tol = tol || 1e-7;
+    let f = new Map();
+    for (const ind of individuos) for (const [h1, h2] of ind) { f.set(h1, (f.get(h1) || 0) + 1); f.set(h2, (f.get(h2) || 0) + 1); }
+    let tot = [...f.values()].reduce((a, b) => a + b, 0);
+    for (const [k, v] of f) f.set(k, v / tot);
+    const N2 = 2 * individuos.length;
+    let it = 0;
+    for (; it < maxIter; it++) {
+      const cont = new Map();
+      for (const ind of individuos) {
+        const w = ind.map(([h1, h2]) => (f.get(h1) || 0) * (f.get(h2) || 0) * (h1 === h2 ? 1 : 2));
+        const s = w.reduce((a, b) => a + b, 0) || 1;
+        ind.forEach(([h1, h2], i) => { const p = w[i] / s; cont.set(h1, (cont.get(h1) || 0) + p); cont.set(h2, (cont.get(h2) || 0) + p); });
+      }
+      let delta = 0;
+      const nf = new Map();
+      for (const [k, v] of cont) { const x = v / N2; nf.set(k, x); delta = Math.max(delta, Math.abs(x - (f.get(k) || 0))); }
+      f = nf;
+      if (delta < tol) break;
+    }
+    for (const [k, v] of f) if (v < 1e-9) f.delete(k);
+    return { freq: f, iteracoes: it + 1 };
+  }
+
+  // ---------------------------------------------------------------- referência
+  function construirReferencia(legado, nomesArquivos) {
+    const ref = { app: "HLA Consenso", tipo: "referencia-LD", versao: 1, criada: new Date().toISOString(), resolucao: "2 campos",
+                  fonte: { ...legado.estatisticas, arquivosLidos: nomesArquivos || [] }, pares: {} };
+    for (const par of PARES) {
+      const [l1, l2] = par.locos;
+      // universo de alelos observados (sem MAC) para expandir os códigos MAC
+      const uni = { [l1]: new Set(), [l2]: new Set() };
+      for (const a of legado.amostras) for (const lc of par.locos) for (const v of (a.alelos[lc] || [])) { const n = normalizar(lc, v); if (n && !n.mac) uni[lc].add(n.alelo); }
+      const inds = [];
+      let comMac = 0;
+      for (const a of legado.amostras) {
+        if (!a.alelos[l1] || !a.alelos[l2]) continue;
+        const g1 = genotipoLocus(l1, a.alelos[l1], uni[l1]), g2 = genotipoLocus(l2, a.alelos[l2], uni[l2]);
+        if (!g1 || !g2) continue;
+        if (g1.some(x => x.length > 1) || g2.some(x => x.length > 1)) comMac++;
+        inds.push(paresHaplotipos(g1, g2));
+      }
+      const r = em(inds);
+      const N = inds.length;
+      const af = { [l1]: {}, [l2]: {} };
+      for (const [h, p] of r.freq) { const [a1, a2] = h.split("~"); af[l1][a1] = (af[l1][a1] || 0) + p; af[l2][a2] = (af[l2][a2] || 0) + p; }
+      const haps = {};
+      for (const [h, p] of [...r.freq].sort((a, b) => b[1] - a[1])) {
+        const [a1, a2] = h.split("~"), pA = af[l1][a1], pB = af[l2][a2];
+        const D = p - pA * pB;
+        const Dmax = D >= 0 ? Math.min(pA * (1 - pB), (1 - pA) * pB) : Math.min(pA * pB, (1 - pA) * (1 - pB));
+        haps[h] = { f: +p.toPrecision(6), dl: Dmax > 0 ? +(D / Dmax).toFixed(3) : 0 };
+      }
+      ref.pares[par.id] = { locos: par.locos, n: N, comMac, iteracoes: r.iteracoes, haplotipos: haps,
+        alelos: Object.fromEntries(par.locos.map(lc => [lc, Object.fromEntries(Object.entries(af[lc]).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, +v.toPrecision(6)]))])) };
+    }
+    return ref;
+  }
+
+  // ---------------------------------------------------------------- checagem de um genótipo
+  /** g: {locus: [v1, v2]} -> por par: status esperado | raro | nunca | alelo_ausente | sem_dados */
+  function checar(ref, g, limiteRaro) {
+    limiteRaro = limiteRaro ?? 3;
+    const out = {};
+    for (const par of PARES) {
+      const R = ref && ref.pares[par.id];
+      if (!R) continue;
+      const [l1, l2] = par.locos;
+      const u1 = new Set(Object.keys(R.alelos[l1] || {})), u2 = new Set(Object.keys(R.alelos[l2] || {}));
+      const g1 = g[l1] ? genotipoLocus(l1, g[l1], u1) : null, g2 = g[l2] ? genotipoLocus(l2, g[l2], u2) : null;
+      if (!g1 || !g2) { out[par.id] = { status: "sem_dados" }; continue; }
+      const N2 = 2 * R.n;
+      const ausentes = [...new Set([...g1.flat().filter(a => !u1.has(a)), ...g2.flat().filter(a => !u2.has(a))])];
+      const freq = h => (R.haplotipos[h] ? R.haplotipos[h].f : 0);
+      const cands = paresHaplotipos(g1, g2).map(([h1, h2]) => ({ h: [h1, h2], c: [freq(h1) * N2, freq(h2) * N2], p: freq(h1) * freq(h2) * (h1 === h2 ? 1 : 2) }));
+      const somaP = cands.reduce((a, b) => a + b.p, 0);
+      cands.sort((a, b) => b.p - a.p || Math.max(...b.c) - Math.max(...a.c));
+      const melhor = cands[0];
+      let status;
+      if (ausentes.length) status = "alelo_ausente";
+      else if (melhor.p === 0) status = "nunca";
+      else status = Math.min(...melhor.c) < limiteRaro ? "raro" : "esperado";
+      out[par.id] = {
+        status, ausentes, haplotipos: melhor.h, contagens: melhor.c.map(x => +x.toFixed(1)),
+        frequencias: melhor.h.map(freq), dl: melhor.h.map(x => (R.haplotipos[x] ? R.haplotipos[x].dl : null)),
+        confianca: somaP > 0 ? melhor.p / somaP : null,
+        alternativas: cands.slice(1, 4).filter(c => c.p > 0).map(c => ({ h: c.h, c: c.c.map(x => +x.toFixed(1)), prob: c.p / somaP })),
+        nRef: R.n,
+      };
+    }
+    return out;
+  }
+
+  /** CSV com as frequências (para conferência/publicação). */
+  function csvFrequencias(ref) {
+    const linhas = ["par;haplotipo;frequencia;contagem_estimada;D_linha;n_individuos"];
+    for (const [pid, R] of Object.entries(ref.pares))
+      for (const [h, x] of Object.entries(R.haplotipos)) linhas.push([pid, h, x.f.toFixed(6).replace(".", ","), (x.f * 2 * R.n).toFixed(1).replace(".", ","), String(x.dl).replace(".", ","), R.n].join(";"));
+    return linhas.join("\n") + "\n";
+  }
+
+  const api = { PARES, LOCOS_LD, normalizar, lerLegado, construirReferencia, checar, csvFrequencias, em, paresHaplotipos };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else raiz.LD = api;
 })(typeof self !== "undefined" ? self : this);
 
 </script>
@@ -1000,7 +1348,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
 
   const STATUS = {
     identico:   { rotulo: "Concordante",                  ordem: 0, cor: "ok" },
-    principal:  { rotulo: "Concordante no 1º genótipo",   ordem: 1, cor: "ok2" },
+    principal:  { rotulo: "Concordante só no 1º genótipo", ordem: 2, cor: "aviso" },
     parcial:    { rotulo: "Concordância parcial",         ordem: 3, cor: "aviso" },
     campos2:    { rotulo: "Concordante só em 2 campos",   ordem: 4, cor: "aviso" },
     divergente: { rotulo: "Divergente",                   ordem: 5, cor: "erro" },
@@ -1010,7 +1358,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   };
 
   function comparar(glEngine, glAssign, opc) {
-    const ign = opc ? opc.ignorarNulos !== false : true;
+    const ign = !!(opc && opc.ignorarNulos === true);
     const temE = !!String(glEngine || "").trim(), temA = !!String(glAssign || "").trim();
     if (!temE && !temA) return { status: "ausente" };
     if (!temE) return { status: "so_assign" };
@@ -1041,7 +1389,8 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     q30Aviso: 80, coberturaErro: 50, coberturaAviso: 80, balancoAviso: 30,   // Assign
     dosagem1Copia: 1.35, dosagem2Copias: 1.65,    // cópias estimadas: < 1,35 = 1 cópia; > 1,65 = 2 cópias; entre = zona cinza
     dosagemAusente: 0.50,                         // abaixo disso = gene ausente (só ruído de mapeamento cruzado)
-    dosagemFatorMin: 0.60,                        // amostra com menos que isso dos reads típicos da placa: dosagem pouco confiável
+    dosagemFatorMin: 0.60,
+    ldLimiteRaro: 3,                              // haplótipo observado menos que isso no legado = incomum                        // amostra com menos que isso dos reads típicos da placa: dosagem pouco confiável
   };
 
   /** Lista de alertas {nivel: erro|aviso|info, texto, metrica} para um locus. */
@@ -1185,6 +1534,37 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     }
     return info;
   }
+  // ================================================================== desequilíbrio de ligação
+  const PARES_LD = { "HLA-DRB1": "DRB1~DQB1", "HLA-DQB1": "DRB1~DQB1", "HLA-B": "B~C", "HLA-C": "B~C" };
+  function aplicarLD(linhas, checarLD) {
+    const porAmostra = new Map();
+    for (const l of linhas) { if (!porAmostra.has(l.chaveAmostra)) porAmostra.set(l.chaveAmostra, {}); porAmostra.get(l.chaveAmostra)[l.locus] = l; }
+    for (const am of porAmostra.values()) {
+      const g = {};
+      for (const lc of Object.keys(PARES_LD)) {
+        const l = am[lc];
+        if (!l) continue;
+        // usa a tipagem que seria liberada: NGSengine aprovado; senão Assign; rejeitado sem Assign fica de fora
+        const op = l.engine && l.engine.status === "Approved" && l.opcoes.engine ? l.opcoes.engine : l.opcoes.assign || null;
+        if (op && (op[0] || op[1])) g[lc] = op;
+      }
+      const r = checarLD(g);
+      for (const lc of Object.keys(PARES_LD)) if (am[lc] && r[PARES_LD[lc]]) am[lc].ld = { par: PARES_LD[lc], ...r[PARES_LD[lc]] };
+    }
+  }
+  function alertasLD(lin, cfg) {
+    const x = lin.ld;
+    if (!x || x.status === "sem_dados") return [];
+    const curto = h => h.replace(/HLA-/g, "");
+    const hs = (x.haplotipos || []).map((h, i) => `${curto(h)} (≈${x.contagens[i]} obs.)`).join(" + ");
+    const ref = `${x.nRef} doadores na referência`;
+    if (x.status === "alelo_ausente") return [{ nivel: "aviso", metrica: "ld", texto: `LD ${x.par}: alelo sem registro na referência (${x.ausentes.map(curto).join(", ")}; ${ref})` }];
+    if (x.status === "nunca") return [{ nivel: cfg && cfg.ldNuncaVermelho === false ? "aviso" : "erro", metrica: "ld",
+      texto: `LD ${x.par}: combinação nunca observada (${ref}) — revisar: troca de amostra, erro de alelo ou haplótipo novo` }];
+    if (x.status === "raro") return [{ nivel: "aviso", metrica: "ld", texto: `LD ${x.par}: haplótipo incomum — ${hs} (${ref})` }];
+    return [{ nivel: "info", metrica: "ld", texto: `LD ${x.par}: haplótipos esperados — ${hs}` }];
+  }
+
   const HEMI_LOCOS = ["HLA-DRB3", "HLA-DRB4", "HLA-DRB5"];
   function alertasDosagem(lin, L) {
     const d = lin.dosagem, out = [];
@@ -1222,7 +1602,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   /** Junta Engine + Assign por amostra/locus, compara e sugere a decisão. */
   function consolidar(engine, assigns, cfg) {
     const L = Object.assign({}, LIMITES_PADRAO, (cfg && cfg.limites) || {});
-    const opc = { ignorarNulos: !cfg || cfg.ignorarNulos !== false };
+    const opc = { ignorarNulos: !!(cfg && cfg.ignorarNulos === true) };
     const exigirRevisaoQC = !cfg || cfg.revisarAlertaVermelho !== false;
     const ntRejeitado = !cfg || cfg.rejeitadoNT !== false;
     const mapaA = new Map();
@@ -1263,12 +1643,13 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       }
       if (e && !aprov && temTipagemEngine && ntRejeitado)
         return { fonte: "nt", automatica: true, motivo: `Locus ${e.status === "Rejected" ? "rejeitado" : "não aprovado"} no NGSengine → NT no resultado final` };
-      if ((st === "identico" || st === "principal") && aprov && temOpcao) {
+      if (st === "identico" && aprov && temOpcao) {
         if (exigirRevisaoQC && lin.qcNivel === "erro")
           return { fonte: null, automatica: false, motivo: "Concordante, mas com alerta vermelho de QC" };
-        return { fonte: "engine", automatica: true, motivo: st === "identico" ? "Concordante e aprovado no NGSengine" : "1º genótipo concordante e aprovado no NGSengine" };
+        return { fonte: "engine", automatica: true, motivo: "Concordante e aprovado no NGSengine" };
       }
       const motivos = {
+        principal: "Mesmo 1º genótipo, mas as listas de genótipos possíveis diferem entre os softwares",
         parcial: "Os softwares têm genótipos em comum, mas também alternativas diferentes",
         campos2: "Concordam apenas em 2 campos",
         divergente: "Nenhum genótipo em comum",
@@ -1280,8 +1661,9 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       return { fonte: null, automatica: false, motivo: m || "Revisar" };
     }
     const dosagemRef = calcularDosagem(linhas, L, cfg);
+    if (cfg && typeof cfg.checarLD === "function") aplicarLD(linhas, cfg.checarLD);
     for (const lin of linhas) {
-      lin.qc = avaliarQC(lin.engine, lin.assign, L).concat(alertasDosagem(lin, L));
+      lin.qc = avaliarQC(lin.engine, lin.assign, L).concat(alertasDosagem(lin, L), alertasLD(lin, cfg));
       lin.qcNivel = pior(lin.qc);
       lin.sugestao = sugerir(lin);
     }
@@ -1547,7 +1929,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   const fmt = (v, d) => (v === null || v === undefined || v === "" ? "—" : typeof v === "number" ? (d !== undefined ? v.toFixed(d) : v.toLocaleString("pt-BR")) : v);
   const CHAVE_LS = "hlaConsenso:v1:";
 
-  const ROT_CURTO = { identico: "Concordante", principal: "1º genótipo", parcial: "Parcial", campos2: "Só 2 campos", divergente: "Divergente", so_engine: "Só NGSengine", so_assign: "Só Assign", ausente: "não tipado" };
+  const ROT_CURTO = { identico: "Concordante", principal: "Só 1º genótipo", parcial: "Parcial", campos2: "Só 2 campos", divergente: "Divergente", so_engine: "Só NGSengine", so_assign: "Só Assign", ausente: "não tipado" };
   const ICONE = { identico: "✓", principal: "≈", parcial: "◐", campos2: "2", divergente: "≠", so_engine: "E", so_assign: "A", ausente: "–" };
   const FONTES = { engine: "NGSengine", assign: "Assign", manual: "Manual", mac: "NGSengine + API MAC", nt: "NT", nao_liberar: "NT", nenhuma: "—" };
   const LIBERADAS = ["engine", "assign", "manual", "mac"];
@@ -1557,10 +1939,28 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     arquivos: { engine: null, assigns: [], dmr: null },
     engine: null, assigns: [], dmr: null, cons: null,
     decisoes: {}, hemi: {}, desfazer: [],
-    cfg: { limites: {}, ignorarNulos: true, revisarAlertaVermelho: true, rejeitadoNT: true, excluir: "1044736", avancar: true, refClasseI: "auto", refClasseII: "auto" },
+    cfg: { versaoCfg: 2, limites: {}, ignorarNulos: false, revisarAlertaVermelho: true, rejeitadoNT: true, excluir: "1044736", avancar: true, refClasseI: "auto", refClasseII: "auto" },
     aba: "placa", filtro: "todos", busca: "", aberto: null,
     analista: localStorage.getItem("hlaConsenso:analista") || "",
+    refLD: null, ldSoIncomuns: false,
   };
+  const CHAVE_REF_LD = "hlaConsenso:referenciaLD";
+  // referência de LD: 1º o arquivo do repositório (dados/referencia_ld.json, gerado pelo ld_referencia.py);
+  // sem ele (ex.: página aberta direto do disco), uma referência importada antes neste navegador
+  E.fonteLD = null;
+  try {
+    const imp = JSON.parse(localStorage.getItem(CHAVE_REF_LD) || "null");
+    if (imp) { E.refLD = imp; E.fonteLD = "importada neste navegador"; }
+    else if (typeof REFERENCIA_LD_PADRAO !== "undefined") { E.refLD = REFERENCIA_LD_PADRAO; E.fonteLD = "embutida no site"; }
+  } catch (e) { E.refLD = null; }
+  fetch("dados/referencia_ld.json", { cache: "no-store" })
+    .then(r => (r.ok ? r.json() : null))
+    .then(ref => {
+      if (!ref || ref.tipo !== "referencia-LD") return;
+      E.refLD = ref; E.fonteLD = "repositório (dados/referencia_ld.json)";
+      if (E.cons) { recalcular(); render(); }
+    })
+    .catch(() => { /* aberto do disco ou sem o arquivo: segue com a importada */ });
 
   // ================================================================ utilidades
   function toast(msg) {
@@ -1644,6 +2044,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
         E.decisoes = salvo.decisoes || {};
         E.hemi = salvo.hemi || {};
         Object.assign(E.cfg, salvo.cfg || {});
+        if (!salvo.cfg || salvo.cfg.versaoCfg !== 2) { E.cfg.ignorarNulos = false; E.cfg.versaoCfg = 2; }   // sessões antigas: mostrar divergências brutas
         if (Object.keys(E.decisoes).length) setTimeout(() => toast(`Retomando a sessão salva: ${Object.keys(E.decisoes).length} decisão(ões) do analista.`), 300);
       }
       recalcular();
@@ -1659,7 +2060,9 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   }
 
   function recalcular() {
-    E.cons = HLA.consolidar(E.engine, E.assigns, E.cfg);
+    const lim = Object.assign({}, HLA.LIMITES_PADRAO, E.cfg.limites || {});
+    const cfg = Object.assign({}, E.cfg, E.refLD ? { checarLD: g => LD.checar(E.refLD, g, lim.ldLimiteRaro) } : {});
+    E.cons = HLA.consolidar(E.engine, E.assigns, cfg);
     E.porChave = new Map(E.cons.linhas.map(l => [l.chave, l]));
   }
 
@@ -1722,6 +2125,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     else if (E.aba === "revisao") app.innerHTML = renderKpis() + renderRevisao();
     else if (E.aba === "qualidade") app.innerHTML = renderQualidade();
     else if (E.aba === "hemi") app.innerHTML = renderHemi();
+    else if (E.aba === "ld") app.innerHTML = renderLD();
     else app.innerHTML = renderExportar();
     ligar(app);
     if (E.aba === "qualidade") desenharGraficos();
@@ -1741,7 +2145,8 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       <span class="chip">${h(eng.software)} ${h(eng.versao)} · IMGT ${h(iv.ve.join(", "))}</span>
       ${as ? `<span class="chip">${h(as.software.replace(/\s*v\.?/i, " "))} · IMGT ${h(iv.va.join(", "))} · ${E.assigns.length} arquivo(s)</span>` : `<span class="chip alerta">sem Assign</span>`}
       ${iv.difere ? `<span class="chip alerta" title="Versões diferentes do banco IMGT/HLA podem explicar divergências de nomenclatura">⚠ IMGT diferente entre softwares</span>` : ""}
-      <span class="chip">${eng.amostras.length} amostras</span></div>`;
+      <span class="chip">${eng.amostras.length} amostras</span>
+      <span class="chip ${E.refLD ? "" : "alerta"}">${E.refLD ? `LD: referência de ${Math.max(...Object.values(E.refLD.pares).map(p => p.n))} doadores` : "LD: sem referência"}</span></div>`;
     const nh = HLA.analisarHemizigose(E.cons, E.decisoes).reduce((n, a) => n + HLA.HEMI.filter(lc => a.locos[lc].conflito && E.hemi[a.chave + "|" + lc] === undefined).length, 0);
     const ch = $("#cont-hemi"); if (ch) { ch.textContent = nh; ch.classList.toggle("zero", nh === 0); }
     const np = E.cons.linhas.filter(pendente).length;
@@ -1754,7 +2159,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
     const L = E.cons.linhas;
     const tipados = L.filter(l => l.comp.status !== "ausente");
     const comp = L.filter(l => l.engine && l.assign && l.comp.status !== "ausente" && !l.comp.status.startsWith("so_"));
-    const conc = comp.filter(l => l.comp.status === "identico" || l.comp.status === "principal");
+    const conc = comp.filter(l => l.comp.status === "identico");
     const pend = L.filter(pendente);
     const decididas = L.filter(l => E.decisoes[l.chave]);
     const liberadas = L.filter(l => LIBERADAS.includes(HLA.tipagemLiberada(l, E.decisoes[l.chave]).estado));
@@ -1785,7 +2190,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   function linhaVisivel(l) {
     const f = E.filtro;
     if (f === "pendentes") return pendente(l);
-    if (f === "divergencias") return ["parcial", "campos2", "divergente", "so_engine", "so_assign"].includes(l.comp.status);
+    if (f === "divergencias") return ["principal", "parcial", "campos2", "divergente", "so_engine", "so_assign"].includes(l.comp.status);
     if (f === "qc") return l.qcNivel === "erro" && l.comp.status !== "ausente";
     if (f === "novo") return l.qc.some(q => q.metrica === "novo");
     if (f === "rejeitados") return l.engine && l.engine.status !== "Approved" && !!(l.engine.glConclusiva || l.engine.glResultado);
@@ -2054,7 +2459,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
   // ================================================================ revisão em lote
   function grupoDe(l) {
     const rej = l.engine && l.engine.status !== "Approved";
-    const qcR = l.qcNivel === "erro" && (l.comp.status === "identico" || l.comp.status === "principal") && !rej;
+    const qcR = l.qcNivel === "erro" && l.comp.status === "identico" && !rej;
     return [l.locus, l.comp.status, rej ? "rej" : "ok", qcR ? "qc" : ""].join("|");
   }
   function renderRevisao() {
@@ -2152,6 +2557,84 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       <div class="placa-wrap"><table class="tabela-qc hz"><thead><tr><th>Amostra</th><th>DRB1</th><th>DRB3 (DR52)</th><th>DRB4 (DR53)</th><th>DRB5 (DR51)</th></tr></thead><tbody>${linhas}</tbody></table></div>`;
   }
 
+  // ================================================================ desequilíbrio de ligação
+  const ROT_LD = { esperado: ["Esperado", "ok"], raro: ["Incomum", "aviso"], nunca: ["Nunca observado", "erro"], alelo_ausente: ["Alelo sem registro", "aviso"], sem_dados: ["Sem dados", "vazio"] };
+  function chipLD(x) {
+    if (!x) return `<span class="muted">—</span>`;
+    const [rot, cls] = ROT_LD[x.status] || ["?", "vazio"];
+    return `<span class="ld-chip ld-${cls}">${h(rot)}</span>`;
+  }
+  function celulaLD(x) {
+    if (!x || x.status === "sem_dados") return `<td>${chipLD(x)}<div class="muted" style="font-size:11.5px">genótipo incompleto, NT ou rejeitado</div></td>`;
+    const hs = (x.haplotipos || []).map((hp, i) => `<div class="mono ld-hap">${h(hp.replace(/HLA-/g, ""))} ${x.contagens[i] < 0.5 ? `<span class="hz-diverge">não observado</span>` : `<span class="muted">≈${x.contagens[i]} obs.${x.dl && x.dl[i] !== null ? ` · D′ ${x.dl[i]}` : ""}</span>`}</div>`).join("");
+    const alt = x.alternativas && x.alternativas.length ? `<div class="muted" style="font-size:11px">fase alternativa: ${x.alternativas.map(a => `${h(a.h.map(q => q.replace(/HLA-/g, "")).join(" + "))} (${(100 * a.prob).toFixed(0)}%)`).join("; ")}</div>` : "";
+    return `<td>${chipLD(x)}${x.confianca !== null && x.confianca < 0.99 ? ` <span class="muted" style="font-size:11.5px">fase ${(100 * x.confianca).toFixed(0)}%</span>` : ""}${hs}${x.ausentes && x.ausentes.length ? `<div class="hz-alerta">sem registro: ${h(x.ausentes.join(", "))}</div>` : ""}${alt}</td>`;
+  }
+  function renderLD() {
+    const R = E.refLD;
+    let topo;
+    if (!R) {
+      topo = `<div class="cartao"><h3>Referência de desequilíbrio de ligação</h3>
+        <div class="sub">Nenhuma referência carregada. Ela é gerada fora do app pelo script <b>ld_referencia.py</b> (veja o README), de tempos em tempos, a partir dos arquivos <b>*_resultado_final</b>. Coloque o arquivo gerado em <span class="mono">dados/referencia_ld.json</span> no repositório do GitHub Pages: o app passa a lê-lo sozinho a cada placa. Para usar a página aberta direto do disco, importe o .json aqui.</div>
+        <button class="btn" id="ld-importar">Importar referência (.json)</button><input type="file" id="ld-json" accept=".json" hidden></div>`;
+    } else {
+      const F = R.fonte || {};
+      const placas = R.placas || [];
+      const tabela = pid => {
+        const P = R.pares[pid]; if (!P) return "";
+        return `<div><h3 style="margin:0 0 4px">${h(pid)}</h3><div class="sub">${P.n} doadores · ${2 * P.n} cromossomos · ${P.comMac} com código MAC</div>
+          <div class="ld-tabela-wrap"><table class="tabela-qc ld-tab"><thead><tr><th>Haplótipo</th><th>Freq.</th><th>≈ obs.</th><th>D′</th></tr></thead><tbody>
+          ${Object.entries(P.haplotipos).filter(([, x]) => x.f * 2 * P.n >= 0.5).map(([hp, x]) => `<tr><td class="mono">${h(hp.replace(/HLA-/g, ""))}</td><td class="mono">${(100 * x.f).toFixed(2)}%</td><td class="mono">${(x.f * 2 * P.n).toFixed(1)}</td><td class="mono">${x.dl}</td></tr>`).join("")}
+          </tbody></table></div></div>`;
+      };
+      topo = `<div class="cartao"><div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:300px"><h3>Referência de desequilíbrio de ligação</h3>
+        <div class="sub">Fonte: <b>${h(E.fonteLD || "—")}</b> · gerada em ${new Date(R.criada).toLocaleString("pt-BR")} · <b>${placas.length || F.arquivos || "?"} placa(s)</b> · ${F.doadores ?? "?"} doadores (${F.familiasControles ?? 0} linhas de famílias/controles ignoradas; ${F.duplicadosDescartados ?? 0} doadores repetidos não recontados) · ${h(R.resolucao || "2 campos")}</div></div>
+        <button class="btn pequeno" id="ld-exp-csv">Frequências (.csv)</button><button class="btn pequeno" id="ld-importar">Importar outra (.json)</button>${E.fonteLD === "importada neste navegador" ? `<button class="btn pequeno" id="ld-remover">Remover importada</button>` : ""}
+        <input type="file" id="ld-json" accept=".json" hidden></div>
+        ${placas.length ? `<details class="mais"><summary>Placas incluídas nesta referência (${placas.length})</summary><div class="ld-tabela-wrap" style="max-height:260px;margin-top:6px"><table class="tabela-qc ld-tab"><thead><tr><th>Placa</th><th>Incluída em</th><th>Doadores novos</th></tr></thead><tbody>
+          ${placas.map(p => `<tr><td class="mono">${h(p.placa)}</td><td>${p.incluida_em ? new Date(p.incluida_em).toLocaleDateString("pt-BR") : "—"}</td><td class="mono">${p.doadores_novos ?? "—"}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+        <details class="mais"><summary>Ver as tabelas de haplótipos</summary><div class="ld-grade">${tabela("DRB1~DQB1")}${tabela("B~C")}</div></details></div>`;
+    }
+    if (!R) return topo;
+    const amostras = amostrasOrdenadas().map(a => ({ a, dq: (a.linhas["HLA-DRB1"] || a.linhas["HLA-DQB1"] || {}).ld, bc: (a.linhas["HLA-B"] || a.linhas["HLA-C"] || {}).ld }));
+    const incomum = x => x && ["raro", "nunca", "alelo_ausente"].includes(x.status);
+    const cont = { nunca: 0, raro: 0, alelo_ausente: 0, esperado: 0 };
+    for (const r of amostras) for (const x of [r.dq, r.bc]) if (x && cont[x.status] !== undefined) cont[x.status]++;
+    const vis = E.ldSoIncomuns ? amostras.filter(r => incomum(r.dq) || incomum(r.bc)) : amostras;
+    const placaAtual = lote().replace(/_resultado_final$/, "");
+    const jaIncluida = (R.placas || []).some(p => p.placa === placaAtual || p.placa.startsWith(E.cons.projeto));
+    return topo + (jaIncluida ? `<div class="aviso-imgt" style="margin-top:14px">Esta placa já faz parte da referência: os haplótipos dela entram na própria contagem (um haplótipo raro desta placa aparecerá com pelo menos 1 observação).</div>` : "") + `<div class="cartao" style="margin-top:14px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">Esta corrida</h3>
+        <span class="ld-chip ld-erro">${cont.nunca} nunca observado(s)</span><span class="ld-chip ld-aviso">${cont.raro + cont.alelo_ausente} incomum(ns)</span><span class="ld-chip ld-ok">${cont.esperado} esperado(s)</span>
+        <label style="margin-left:auto;font-size:13px"><input type="checkbox" id="ld-so" ${E.ldSoIncomuns ? "checked" : ""}> Só incomuns</label></div>
+      <div class="sub">Fase mais provável dos dois haplótipos de cada amostra (EM sobre a referência), com o número aproximado de vezes em que cada haplótipo foi observado no legado. Usa a tipagem que seria liberada (NGSengine aprovado; senão Assign). Clique numa linha para abrir a tipagem.</div>
+      <table class="tabela-qc"><thead><tr><th>Amostra</th><th>DRB1 · DQB1</th><th>DRB1~DQB1</th><th>B · C</th><th>B~C</th></tr></thead><tbody>
+      ${vis.map(({ a, dq, bc }) => {
+        const tip = lc => { const l = a.linhas[lc]; if (!l) return "—"; const op = l.engine && l.engine.status === "Approved" && l.opcoes.engine ? l.opcoes.engine : l.opcoes.assign; return op ? op.filter(Boolean).map(x => x.replace(/^[A-Z0-9]+\*/, "")).join("/") : "—"; };
+        const ch = (a.linhas["HLA-DRB1"] || a.linhas["HLA-B"] || {}).chave || "";
+        return `<tr data-chave="${h(ch)}"><td class="mono"><b>${h(a.id)}</b></td><td class="mono" style="font-size:11.5px">${h(tip("HLA-DRB1"))}<br>${h(tip("HLA-DQB1"))}</td>${celulaLD(dq)}<td class="mono" style="font-size:11.5px">${h(tip("HLA-B"))}<br>${h(tip("HLA-C"))}</td>${celulaLD(bc)}</tr>`;
+      }).join("")}</tbody></table></div>`;
+  }
+  function ligarLD(app) {
+    const b = (id, fn) => { const x = app.querySelector(id); if (x) x.onclick = fn; };
+    b("#ld-importar", () => app.querySelector("#ld-json").click());
+    b("#ld-exp-csv", () => baixar(LD.csvFrequencias(E.refLD), `frequencias_haplotipos_${E.refLD.criada.slice(0, 10)}.csv`));
+    b("#ld-remover", () => modal(`<h2>Remover a referência importada?</h2><p class="sec">Ela sai deste navegador. A do repositório (dados/referencia_ld.json), se existir, volta a ser usada ao recarregar.</p><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="nao">Cancelar</button><button class="btn primario" id="sim">Remover</button></div>`, m => {
+      m.querySelector("#nao").onclick = fecharModal;
+      m.querySelector("#sim").onclick = () => { E.refLD = null; E.fonteLD = null; try { localStorage.removeItem(CHAVE_REF_LD); } catch (e) {} fecharModal(); recalcular(); render(); toast("Referência importada removida. Recarregue a página para usar a do repositório, se houver."); };
+    }));
+    const so = app.querySelector("#ld-so"); if (so) so.onchange = () => { E.ldSoIncomuns = so.checked; render(); };
+    const usar = ref => {
+      E.refLD = ref; E.fonteLD = "importada neste navegador";
+      try { localStorage.setItem(CHAVE_REF_LD, JSON.stringify(ref)); } catch (e) { toast("Não foi possível salvar a referência neste navegador; exporte o .json."); }
+      recalcular(); render();
+    };
+    const fj = app.querySelector("#ld-json");
+    if (fj) fj.onchange = async () => {
+      try { const ref = JSON.parse(await fj.files[0].text()); if (ref.tipo !== "referencia-LD") throw new Error("arquivo não é uma referência de LD do HLA Consenso"); usar(ref); toast("Referência importada."); }
+      catch (e) { toast(e.message); }
+    };
+  }
+
   // ================================================================ qualidade
   function renderQualidade() {
     const L = E.cons.limites;
@@ -2162,7 +2645,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       ["segBaseErro", "2ª base het. — crítico <"], ["segBaseAviso", "2ª base het. — atenção <"],
       ["mapPctAviso", "Reads usados no locus (%) <"], ["q30Aviso", "Assign Q30 (%) <"],
       ["coberturaErro", "Assign cobertura — crítico <"], ["coberturaAviso", "Assign cobertura — atenção <"], ["balancoAviso", "Assign balanço alélico (%) <"],
-      ["dosagem1Copia", "Dosagem: 1 cópia se <"], ["dosagem2Copias", "Dosagem: 2 cópias se >"], ["dosagemAusente", "Dosagem: gene ausente se cópias <"], ["dosagemFatorMin", "Dosagem confiável se reads da referência ≥ (×típico)"],
+      ["dosagem1Copia", "Dosagem: 1 cópia se <"], ["dosagem2Copias", "Dosagem: 2 cópias se >"], ["dosagemAusente", "Dosagem: gene ausente se cópias <"], ["dosagemFatorMin", "Dosagem confiável se reads da referência ≥ (×típico)"], ["ldLimiteRaro", "LD: haplótipo incomum se observado <"],
     ];
     const alertas = E.cons.linhas.filter(l => l.comp.status !== "ausente" && (l.qcNivel === "erro" || l.qcNivel === "aviso"))
       .sort((a, b) => (a.qcNivel === b.qcNivel ? 0 : a.qcNivel === "erro" ? -1 : 1));
@@ -2176,9 +2659,10 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       <div class="cartao largo"><h3>Limites de qualidade</h3><div class="sub">Valores iniciais sugeridos (o dashboard antigo alertava profundidade &lt; 50x). Ajuste ao POP do laboratório: os alertas e as sugestões são recalculados na hora e ficam salvos.</div>
         <div class="limites">${campos.map(([k, r]) => `<label>${h(r)}<input type="number" step="any" data-lim="${k}" value="${L[k]}"></label>`).join("")}</div>
         <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:13px">
-          <label><input type="checkbox" id="cfg-nulos" ${E.cfg.ignorarNulos ? "checked" : ""}> Ignorar alternativas com alelo nulo (N) na comparação</label>
+          <label title="Desligado (recomendado): qualquer diferença entre as listas de genótipos aparece em amarelo"><input type="checkbox" id="cfg-nulos" ${E.cfg.ignorarNulos ? "checked" : ""}> Ignorar alternativas com alelo nulo (N) na comparação</label>
           <label><input type="checkbox" id="cfg-qc" ${E.cfg.revisarAlertaVermelho ? "checked" : ""}> Exigir revisão de concordantes com alerta vermelho</label>
           <label><input type="checkbox" id="cfg-avancar" ${E.cfg.avancar ? "checked" : ""}> Ir para a próxima pendência após decidir</label>
+          <label><input type="checkbox" id="cfg-ldv" ${E.cfg.ldNuncaVermelho !== false ? "checked" : ""}> LD nunca observado = alerta vermelho (revisão)</label>
           <button class="btn pequeno" id="lim-padrao">Restaurar padrões</button>
         </div></div>
       <div class="cartao largo"><h3>Locos com alerta (${alertas.length})</h3><div class="sub">Clique para abrir a comparação</div>
@@ -2284,10 +2768,10 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
           const r = el("rect", { x: x0, y: yy + 4, width: Math.max(1, x1 - x0 - 2), height: rowH - 10, rx: 3, style: "fill:var(--c);cursor:pointer" }, g);
           r.addEventListener("mousemove", ev => dica(ev, `<b>${h(lc)}</b> · ${h(HLA.STATUS[st].rotulo)}<br>${n} de ${ls.length} locos (${Math.round((100 * n) / ls.length)}%)`));
           r.addEventListener("mouseleave", ev => dica(ev, null));
-          r.addEventListener("click", () => { E.aba = "placa"; E.filtro = st === "identico" || st === "principal" ? "todos" : "divergencias"; render(); });
+          r.addEventListener("click", () => { E.aba = "placa"; E.filtro = st === "identico" ? "todos" : "divergencias"; render(); });
           acc += n;
         }
-        const ok = ls.filter(l => l.comp.status === "identico" || l.comp.status === "principal").length;
+        const ok = ls.filter(l => l.comp.status === "identico").length;
         el("text", { x: W - m.r + 6, y: yy + 15 }, s, Math.round((100 * ok) / ls.length) + "%");
       });
       $("#g-conc").appendChild(s);
@@ -2447,7 +2931,7 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
 
   // ================================================================ eventos
   function ligar(app) {
-    app.querySelectorAll(".cel[data-chave], .linha-rev[data-chave], .tabela-qc tr[data-chave]").forEach(b => b.onclick = () => abrirPainel(b.dataset.chave));
+    app.querySelectorAll(".cel[data-chave], .linha-rev[data-chave], .tabela-qc tr[data-chave]:not([data-chave=''])").forEach(b => b.onclick = () => abrirPainel(b.dataset.chave));
     app.querySelectorAll("[data-ir]").forEach(b => b.onclick = ev => { ev.preventDefault(); E.aba = b.dataset.ir; render(); });
     app.querySelectorAll("[data-filtro]").forEach(b => b.onclick = () => { E.aba = "placa"; E.filtro = b.dataset.filtro; render(); });
     app.querySelectorAll("#seg-filtro button").forEach(b => b.onclick = () => { E.filtro = b.dataset.f; render(); });
@@ -2490,6 +2974,8 @@ b.dc-cinza { color: var(--text-primary); background: var(--warning-soft); paddin
       } catch (e) { toast("Arquivo de sessão inválido."); }
     };
     chk("#cfg-nt", "rejeitadoNT");
+    chk("#cfg-ldv", "ldNuncaVermelho");
+    ligarLD(app);
     app.querySelectorAll("[data-ref]").forEach(r => r.onchange = () => {
       E.cfg["refClasse" + r.dataset.ref] = r.value; recalcular(); salvar(); render();
       toast(`Referência da classe ${r.dataset.ref}: ${r.value === "auto" ? "automática" : r.value.replace("HLA-", "")}`);
